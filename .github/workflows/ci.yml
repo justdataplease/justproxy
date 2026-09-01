@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android and JVM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Test, lint, and build APK
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest lintDebug assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v7
+        with:
+          name: JustProxy-android-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  python:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Test SDK
+        run: python -m unittest discover -s python/tests -v
+      - name: Build and smoke-test wheel
+        if: matrix.python == '3.12'
+        run: |
+          python -m pip install build twine
+          python -m build --outdir package-dist python
+          python -m twine check package-dist/*
+          python -m venv package-smoke
+          package-smoke/bin/python -m pip install --no-index package-dist/*.whl
+          package-smoke/bin/python -c "from justproxy_client import JustProxyClient; assert JustProxyClient('token', proxy_username='user').socks_url(proxy_port=8282).startswith('socks5h://user:token@')"
+          package-smoke/bin/justproxy --version
+
+  windows:
+    name: Windows companion
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Test desktop helpers
+        run: python -m unittest discover -s desktop/tests -v
+      - name: Compile Python sources
+        run: python -m compileall -q python/src desktop
+      - name: Build desktop executable
+        run: |
+          python -m pip install "pyinstaller>=6,<7"
+          cd desktop
+          python -m PyInstaller --noconfirm --clean JustProxyDesktop.spec
+      - name: Smoke-test desktop executable
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath .\desktop\dist\JustProxyDesktop.exe -ArgumentList '--self-test' -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Desktop self-test failed with exit code $($process.ExitCode)" }

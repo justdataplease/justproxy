@@ -1,0 +1,10 @@
+<resources>
+    <color name="navy">#081A2C</color>
+    <color name="navy_surface">#10283D</color>
+    <color name="teal">#21D4B4</color>
+    <color name="teal_dark">#0C8F7A</color>
+    <color name="off_white">#F4F8FB</color>
+    <color name="slate">#61788A</color>
+    <color name="danger">#E85D67</color>
+    <color name="white">#FFFFFF</color>
+</resources>
