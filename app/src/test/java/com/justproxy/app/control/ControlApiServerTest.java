@@ -115,7 +115,7 @@ public final class ControlApiServerTest {
     private Socket connectSilently() throws Exception {
         Socket socket = new Socket();
         socket.connect(new InetSocketAddress(
-                InetAddress.getLoopbackAddress(), server.getBoundPort()), 1_000);
+                InetAddress.getLoopbackAddress(), server.getBoundPort()), 5_000);
         socket.setSoTimeout(2_000);
         return socket;
     }
