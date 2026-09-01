@@ -22,7 +22,7 @@ jobs:
         run: |
           rustup toolchain install 1.85.1 --profile minimal --component clippy,rustfmt
           rustup target add --toolchain 1.85.1 aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
-          cargo +1.85.1 install cargo-ndk --version 4.1.2 --locked
+          cargo install cargo-ndk --version 4.1.2 --locked
           sdkmanager "ndk;28.2.13676358"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
       - name: Test and lint native gateway
