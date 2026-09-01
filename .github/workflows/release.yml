@@ -23,7 +23,9 @@ jobs:
           rustup toolchain install 1.85.1 --profile minimal
           rustup target add --toolchain 1.85.1 aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
           cargo install cargo-ndk --version 4.1.2 --locked
-          sdkmanager "ndk;28.2.13676358"
+          sdkmanager_path="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -1)"
+          test -n "$sdkmanager_path"
+          "$sdkmanager_path" "ndk;28.2.13676358"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
       - name: Test native gateway
         working-directory: native/wireguard-gateway
