@@ -4,7 +4,8 @@ JustProxy Desktop is a zero-runtime-dependency Windows companion for the
 JustProxy Android app. It uses Python's built-in Tkinter UI and the sibling
 `justproxy-client` SDK. It can show proxy state and traffic counters, request a
 fresh public-IP check, ask the phone to reconnect active proxy sessions, and
-copy authenticated HTTP or SOCKS5 proxy URLs.
+paste the Android app's setup block or copy authenticated HTTP or SOCKS5 proxy
+URLs.
 
 The reconnect action can interrupt active clients. It asks the phone to perform
 its available rotation/reconnect action, but **it does not guarantee that the
@@ -44,6 +45,16 @@ Enter the values displayed by the Android app:
 - **Proxy port:** normally `8282`; a successful status call updates this field
   if the phone reports a different port.
 
+Use **Copy setup** on the Android phone, transfer that text to the PC clipboard,
+then select **Paste phone setup** to fill all five fields at once. The desktop
+cross-checks the HTTP, SOCKS5, control API, and token entries before accepting
+the block.
+
+The desktop remembers only the host, control port, proxy username, and proxy
+port in `%APPDATA%\JustProxy\desktop.json`. It never writes the API token or
+proxy password to that file. A missing, unreadable, or malformed settings file
+is ignored and the app continues with safe defaults.
+
 For a USB-connected development device, forward both ports before using
 `127.0.0.1`:
 
@@ -67,6 +78,8 @@ internet.
   then performs the same asynchronous polling. Acceptance only means that the
   request was accepted; carrier IP change is not guaranteed.
 - **Refresh** retrieves both status and traffic metrics.
+- **Paste phone setup** validates the clipboard block created by Android's
+  **Copy setup** action and fills the connection form.
 - **Copy HTTP setup** copies an `http://` proxy URL.
 - **Copy SOCKS5 setup** copies a `socks5h://` URL, so DNS is resolved through
   the phone.
@@ -75,7 +88,10 @@ The copy actions require the proxy username. Their URL contains that username
 and the token as its proxy password. Treat the clipboard as sensitive and clear
 it after configuring your client. Copied credential values are never written to
 the activity log. If no fresh IP observation arrives within the polling window,
-the activity log asks you to use **Refresh** later.
+the activity log asks you to use **Refresh** later. JustProxy Desktop holds a
+pasted token only in process memory and excludes it from the settings file;
+clipboard history or synchronization may retain the original setup text until
+you clear it.
 
 Traffic is displayed as upload, download, and total for the current run, local
 day, and lifetime. Units are IEC units (KiB, MiB, GiB). The app also shows

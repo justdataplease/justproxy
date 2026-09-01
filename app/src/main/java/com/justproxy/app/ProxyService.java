@@ -44,6 +44,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 public final class ProxyService extends Service {
     public static final String ACTION_START = "com.justproxy.app.START";
@@ -54,6 +55,7 @@ public final class ProxyService extends Service {
 
     private static final String CHANNEL_ID = "proxy_service";
     private static final int NOTIFICATION_ID = 1001;
+    private static final long ANALYTICS_REFRESH_INTERVAL_MILLIS = 5_000L;
     private static final AtomicReference<ProxyStatus> STATUS =
             new AtomicReference<>(ProxyStatus.stopped());
 
@@ -61,6 +63,8 @@ public final class ProxyService extends Service {
     private final IpCheckGate ipCheckGate = new IpCheckGate();
     private final RunTotals runTotals = new RunTotals();
     private final TrafficCheckpoint trafficCheckpoint = new TrafficCheckpoint();
+    private final TimedCache<AnalyticsSummary> analyticsSummaryCache =
+            new TimedCache<>(ANALYTICS_REFRESH_INTERVAL_MILLIS);
     private ScheduledExecutorService worker;
     private AppSettings settings;
     private AnalyticsStore analyticsStore;
@@ -125,7 +129,15 @@ public final class ProxyService extends Service {
             startInForeground("Starting proxy");
             worker.execute(this::startRuntime);
         }
-        return START_NOT_STICKY;
+        return restartModeForAction(action, desiredRunning);
+    }
+
+    static int restartModeForAction(String action, boolean running) {
+        if (ACTION_STOP.equals(action)) return START_NOT_STICKY;
+        if (ACTION_ROTATE.equals(action) || ACTION_REFRESH_IP.equals(action)) {
+            return running ? START_STICKY : START_NOT_STICKY;
+        }
+        return START_STICKY;
     }
 
     private void startRuntime() {
@@ -324,7 +336,7 @@ public final class ProxyService extends Service {
         }
         if (!ipCheckGate.startOrQueue()) return;
         long generation = ipCheckGeneration;
-        String previous = analyticsStore.getSummary().getCurrentPublicIp();
+        String previous = getAnalyticsSummary().getCurrentPublicIp();
         try {
             publicIpChecker.checkAsync(network, new PublicIpChecker.Callback() {
                 @Override public void onSuccess(String publicIp) {
@@ -348,6 +360,7 @@ public final class ProxyService extends Service {
         boolean current = desiredRunning && generation == ipCheckGeneration;
         if (current && error == null) {
             analyticsStore.recordPublicIp(publicIp);
+            analyticsSummaryCache.invalidate();
             if (previous == null) {
                 serviceMessage = "Public IP detected";
             } else if (previous.equals(publicIp)) {
@@ -390,7 +403,7 @@ public final class ProxyService extends Service {
     }
 
     private void updateStatus() {
-        AnalyticsSummary summary = analyticsStore.getSummary();
+        AnalyticsSummary summary = getAnalyticsSummary();
         ProxyStatsSnapshot stats = proxyServer == null ? null : proxyServer.getStatsSnapshot();
         ProxyStatus.State state = !desiredRunning ? ProxyStatus.State.STOPPED
                 : stats != null && stats.isRunning() ? ProxyStatus.State.RUNNING
@@ -409,6 +422,11 @@ public final class ProxyService extends Service {
                 stats == null ? 0 : stats.getActiveConnections(),
                 summary.getLifetimeSessionCount(), summary.getPublicIpChangeCount(),
                 desiredRunning ? startedAtMillis : 0, nextRotationAtMillis));
+    }
+
+    private AnalyticsSummary getAnalyticsSummary() {
+        return analyticsSummaryCache.get(
+                System.currentTimeMillis(), analyticsStore::getSummary);
     }
 
     private void stopRuntime(boolean stopService, String message) {
@@ -460,6 +478,7 @@ public final class ProxyService extends Service {
             analyticsStore.recordTrafficDelta(
                     delta.uploadedBytes, delta.downloadedBytes, now);
             trafficCheckpoint.commit(delta);
+            analyticsSummaryCache.invalidate();
             lastTrafficCheckpointAtMillis = now;
         } catch (RuntimeException ignored) {
             // Keep the old baseline so the complete delta is retried at the next checkpoint.
@@ -575,6 +594,7 @@ public final class ProxyService extends Service {
                     session.getProtocol() == null ? "UNKNOWN" : session.getProtocol().name(),
                     target, session.getBytesUploaded(), session.getBytesDownloaded(),
                     reason == null ? "UNKNOWN" : reason.name());
+            analyticsSummaryCache.invalidate();
             if (desiredRunning) execute(() -> checkpointTraffic(true));
         }
     }
@@ -755,6 +775,39 @@ public final class ProxyService extends Service {
                 return Long.MAX_VALUE;
             }
             return left + right;
+        }
+    }
+
+    /** Thread-safe read-through cache that can be refreshed immediately after analytics writes. */
+    static final class TimedCache<T> {
+        private final long maxAgeMillis;
+        private T value;
+        private long loadedAtMillis;
+        private boolean invalidated = true;
+
+        TimedCache(long maxAgeMillis) {
+            if (maxAgeMillis <= 0) {
+                throw new IllegalArgumentException("Cache age must be positive");
+            }
+            this.maxAgeMillis = maxAgeMillis;
+        }
+
+        synchronized T get(long nowMillis, Supplier<T> loader) {
+            if (loader == null) throw new IllegalArgumentException("Loader is required");
+            boolean clockMovedBackwards = value != null && nowMillis < loadedAtMillis;
+            boolean expired = value != null && nowMillis - loadedAtMillis >= maxAgeMillis;
+            if (value == null || invalidated || clockMovedBackwards || expired) {
+                T loaded = loader.get();
+                if (loaded == null) throw new IllegalStateException("Loader returned null");
+                value = loaded;
+                loadedAtMillis = nowMillis;
+                invalidated = false;
+            }
+            return value;
+        }
+
+        synchronized void invalidate() {
+            invalidated = true;
         }
     }
 

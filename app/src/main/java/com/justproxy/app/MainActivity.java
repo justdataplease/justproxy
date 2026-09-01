@@ -20,7 +20,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.List;
-import java.util.Locale;
 
 public final class MainActivity extends Activity {
     private final Handler ticker = new Handler(Looper.getMainLooper());
@@ -229,13 +228,15 @@ public final class MainActivity extends Activity {
         rotateButton.setEnabled(running);
         refreshIpButton.setEnabled(status.isActive());
         publicIpText.setText(status.publicIp);
-        runTrafficText.setText(formatBytes(status.runUploadedBytes + status.runDownloadedBytes));
-        todayTrafficText.setText(formatBytes(status.todayUploadedBytes + status.todayDownloadedBytes));
-        lifetimeTrafficText.setText(formatBytes(
+        runTrafficText.setText(ByteFormatter.format(
+                status.runUploadedBytes + status.runDownloadedBytes));
+        todayTrafficText.setText(ByteFormatter.format(
+                status.todayUploadedBytes + status.todayDownloadedBytes));
+        lifetimeTrafficText.setText(ByteFormatter.format(
                 status.lifetimeUploadedBytes + status.lifetimeDownloadedBytes));
         activeConnectionsText.setText(status.activeConnections + " active");
-        analyticsDetailText.setText("Up " + formatBytes(status.lifetimeUploadedBytes)
-                + "  |  Down " + formatBytes(status.lifetimeDownloadedBytes)
+        analyticsDetailText.setText("Up " + ByteFormatter.format(status.lifetimeUploadedBytes)
+                + "  |  Down " + ByteFormatter.format(status.lifetimeDownloadedBytes)
                 + "  |  " + status.lifetimeSessions + " sessions"
                 + "  |  " + status.ipChangeCount + " IP changes");
         setConfigurationEnabled(!status.isActive());
@@ -363,15 +364,6 @@ public final class MainActivity extends Activity {
         if (value < min || value > max) {
             throw new IllegalArgumentException(label + " must be " + min + " to " + max);
         }
-    }
-
-    private static String formatBytes(long bytes) {
-        if (bytes < 1_000L) return bytes + " B";
-        if (bytes < 1_000_000L) return String.format(Locale.ROOT, "%.1f KB", bytes / 1_000d);
-        if (bytes < 1_000_000_000L) {
-            return String.format(Locale.ROOT, "%.1f MB", bytes / 1_000_000d);
-        }
-        return String.format(Locale.ROOT, "%.2f GB", bytes / 1_000_000_000d);
     }
 
     @Override protected void onResume() {

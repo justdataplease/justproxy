@@ -49,7 +49,7 @@ public final class ControlApiServer implements AutoCloseable {
     private final AtomicBoolean running = new AtomicBoolean();
     private final Set<Socket> liveClients = ConcurrentHashMap.newKeySet();
     private volatile ThreadPoolExecutor clients;
-    private ServerSocket serverSocket;
+    private volatile ServerSocket serverSocket;
     private Thread acceptThread;
 
     public ControlApiServer(InetAddress bindAddress, int port, String token,
@@ -99,7 +99,9 @@ public final class ControlApiServer implements AutoCloseable {
     private void acceptLoop() {
         while (running.get()) {
             try {
-                Socket client = serverSocket.accept();
+                ServerSocket listener = serverSocket;
+                if (listener == null) break;
+                Socket client = listener.accept();
                 if (!ClientAddressPolicy.isTrustedLocal(client.getInetAddress())) {
                     try { client.close(); } catch (IOException ignored) {}
                     continue;

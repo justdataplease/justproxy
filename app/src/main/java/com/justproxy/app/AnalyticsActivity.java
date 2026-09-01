@@ -18,7 +18,6 @@ import com.justproxy.app.analytics.PublicIpObservation;
 import java.text.DateFormat;
 import java.util.Date;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -109,12 +108,13 @@ public final class AnalyticsActivity extends Activity {
 
     private void render(AnalyticsSummary summary, List<PublicIpObservation> ips,
                         List<ProxySessionRecord> sessions) {
-        summaryView.setText("Today  " + formatBytes(summary.getTodayTotalBytes())
+        summaryView.setText("Today  " + ByteFormatter.format(summary.getTodayTotalBytes())
                 + " in " + summary.getTodaySessionCount() + " sessions\n"
-                + "Lifetime  " + formatBytes(summary.getLifetimeTotalBytes())
+                + "Lifetime  " + ByteFormatter.format(summary.getLifetimeTotalBytes())
                 + " in " + summary.getLifetimeSessionCount() + " sessions\n"
-                + "Upload  " + formatBytes(summary.getLifetimeUploadedBytes())
-                + "    Download  " + formatBytes(summary.getLifetimeDownloadedBytes()) + "\n"
+                + "Upload  " + ByteFormatter.format(summary.getLifetimeUploadedBytes())
+                + "    Download  " + ByteFormatter.format(
+                        summary.getLifetimeDownloadedBytes()) + "\n"
                 + "Public IP changes  " + summary.getPublicIpChangeCount());
 
         ipList.removeAllViews();
@@ -138,8 +138,8 @@ public final class AnalyticsActivity extends Activity {
                 TextView row = text(session.getProtocol() + "  " + session.getTarget()
                         + "\n" + formatTime(session.getStartedAtMillis())
                         + "  |  " + session.getClientAddress()
-                        + "\nUp " + formatBytes(session.getUploadedBytes())
-                        + "  Down " + formatBytes(session.getDownloadedBytes())
+                        + "\nUp " + ByteFormatter.format(session.getUploadedBytes())
+                        + "  Down " + ByteFormatter.format(session.getDownloadedBytes())
                         + "  |  " + session.getResult());
                 row.setPadding(0, dp(9), 0, dp(9));
                 sessionList.addView(row, matchWrap());
@@ -218,15 +218,6 @@ public final class AnalyticsActivity extends Activity {
     private static String formatTime(long millis) {
         return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM)
                 .format(new Date(millis));
-    }
-
-    private static String formatBytes(long bytes) {
-        if (bytes < 1_000L) return bytes + " B";
-        if (bytes < 1_000_000L) return String.format(Locale.ROOT, "%.1f KB", bytes / 1_000d);
-        if (bytes < 1_000_000_000L) {
-            return String.format(Locale.ROOT, "%.1f MB", bytes / 1_000_000d);
-        }
-        return String.format(Locale.ROOT, "%.2f GB", bytes / 1_000_000_000d);
     }
 
     @Override

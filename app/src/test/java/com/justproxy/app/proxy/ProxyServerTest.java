@@ -231,9 +231,9 @@ public class ProxyServerTest {
                             new byte[] {0x01, 0x00},
                             readFully(client.getInputStream(), 2));
                     sendSocksMappedIpv6Connect(client, target, 80);
-                    assertArrayEquals(
-                            new byte[] {0x05, 0x02},
-                            readFully(client.getInputStream(), 2));
+                    byte[] reply = readFully(client.getInputStream(), 10);
+                    assertEquals(0x05, reply[0] & 0xff);
+                    assertEquals(0x02, reply[1] & 0xff);
                 }
             }
             await(() -> proxy.getStatsSnapshot().getActiveConnections() == 0);

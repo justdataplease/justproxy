@@ -6,7 +6,33 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 public final class ProxyServiceRunTotalsTest {
+    @Test
+    public void startAndRestartAreStickyWhileStopIsNot() {
+        assertEquals(android.app.Service.START_NOT_STICKY,
+                ProxyService.restartModeForAction(ProxyService.ACTION_STOP, true));
+        assertEquals(android.app.Service.START_STICKY,
+                ProxyService.restartModeForAction(ProxyService.ACTION_START, false));
+        assertEquals(android.app.Service.START_STICKY,
+                ProxyService.restartModeForAction(ProxyService.ACTION_RESTART, false));
+        assertEquals(android.app.Service.START_STICKY,
+                ProxyService.restartModeForAction(null, false));
+    }
+
+    @Test
+    public void utilityActionsAreStickyOnlyDuringAnActiveRun() {
+        assertEquals(android.app.Service.START_NOT_STICKY,
+                ProxyService.restartModeForAction(ProxyService.ACTION_ROTATE, false));
+        assertEquals(android.app.Service.START_NOT_STICKY,
+                ProxyService.restartModeForAction(ProxyService.ACTION_REFRESH_IP, false));
+        assertEquals(android.app.Service.START_STICKY,
+                ProxyService.restartModeForAction(ProxyService.ACTION_ROTATE, true));
+        assertEquals(android.app.Service.START_STICKY,
+                ProxyService.restartModeForAction(ProxyService.ACTION_REFRESH_IP, true));
+    }
+
     @Test
     public void accumulatesReplacedServersUntilTrueRunReset() {
         ProxyService.RunTotals totals = new ProxyService.RunTotals();
@@ -88,5 +114,34 @@ public final class ProxyServiceRunTotalsTest {
         ProxyService.TrafficCheckpoint.Delta afterReset = checkpoint.pending(5, 7);
         assertEquals(5L, afterReset.uploadedBytes);
         assertEquals(7L, afterReset.downloadedBytes);
+    }
+
+    @Test
+    public void analyticsSummaryCacheLoadsAtMostOncePerWindow() {
+        ProxyService.TimedCache<String> cache = new ProxyService.TimedCache<>(5_000L);
+        AtomicInteger loads = new AtomicInteger();
+
+        assertEquals("summary-1", cache.get(1_000L,
+                () -> "summary-" + loads.incrementAndGet()));
+        assertEquals("summary-1", cache.get(5_999L,
+                () -> "summary-" + loads.incrementAndGet()));
+        assertEquals(1, loads.get());
+
+        assertEquals("summary-2", cache.get(6_000L,
+                () -> "summary-" + loads.incrementAndGet()));
+        assertEquals(2, loads.get());
+    }
+
+    @Test
+    public void analyticsSummaryCacheRefreshesAfterWriteInvalidation() {
+        ProxyService.TimedCache<String> cache = new ProxyService.TimedCache<>(5_000L);
+        AtomicInteger loads = new AtomicInteger();
+
+        assertEquals("summary-1", cache.get(1_000L,
+                () -> "summary-" + loads.incrementAndGet()));
+        cache.invalidate();
+        assertEquals("summary-2", cache.get(1_001L,
+                () -> "summary-" + loads.incrementAndGet()));
+        assertEquals(2, loads.get());
     }
 }

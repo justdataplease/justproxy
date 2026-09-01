@@ -15,21 +15,33 @@ from typing import Any, Callable, Optional
 
 try:
     from .helpers import (
+        DEFAULT_SAVED_CONNECTION,
         EM_DASH,
         ConnectionSettings,
+        SavedConnectionSettings,
         describe_rotation,
+        desktop_config_path,
         format_count,
         format_traffic,
         latest_observation_ms,
+        load_saved_connection,
+        parse_android_setup,
+        save_saved_connection,
     )
 except ImportError:
     from helpers import (  # type: ignore[no-redef]
+        DEFAULT_SAVED_CONNECTION,
         EM_DASH,
         ConnectionSettings,
+        SavedConnectionSettings,
         describe_rotation,
+        desktop_config_path,
         format_count,
         format_traffic,
         latest_observation_ms,
+        load_saved_connection,
+        parse_android_setup,
+        save_saved_connection,
     )
 
 
@@ -72,11 +84,20 @@ class JustProxyDesktop:
         self.results: "queue.Queue[tuple[str, Callable[[Any], None], Any, Optional[BaseException]]]" = queue.Queue()
         self.network_buttons: list[ttk.Button] = []
 
-        self.host_var = tk.StringVar(value="127.0.0.1")
-        self.control_port_var = tk.StringVar(value="8283")
+        try:
+            self.config_path: Optional[Path] = desktop_config_path()
+            saved_connection, config_warning = load_saved_connection(self.config_path)
+        except Exception as error:
+            self.config_path = None
+            saved_connection = DEFAULT_SAVED_CONNECTION
+            detail = " ".join(str(error).split()) or error.__class__.__name__
+            config_warning = "Saved connection settings are unavailable: {0}".format(detail)
+
+        self.host_var = tk.StringVar(value=saved_connection.host)
+        self.control_port_var = tk.StringVar(value=str(saved_connection.control_port))
         self.token_var = tk.StringVar()
-        self.proxy_username_var = tk.StringVar()
-        self.proxy_port_var = tk.StringVar(value="8282")
+        self.proxy_username_var = tk.StringVar(value=saved_connection.proxy_username)
+        self.proxy_port_var = tk.StringVar(value=str(saved_connection.proxy_port))
         self.show_token_var = tk.BooleanVar(value=False)
 
         self.state_var = tk.StringVar(value=EM_DASH)
@@ -95,6 +116,8 @@ class JustProxyDesktop:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(self.POLL_MILLIS, self._poll_results)
         self._log("Ready. Enter the connection values shown by the JustProxy Android app.")
+        if config_warning:
+            self._log(config_warning)
         if SDK_ERROR:
             self._log(SDK_ERROR)
             self.root.after(250, lambda: messagebox.showerror("SDK unavailable", SDK_ERROR))
@@ -210,6 +233,9 @@ class JustProxyDesktop:
 
         setup_actions = ttk.Frame(middle, style="App.TFrame")
         setup_actions.grid(row=0, column=1, sticky="e")
+        ttk.Button(setup_actions, text="Paste phone setup", command=self.paste_setup).pack(
+            side="left", padx=(0, 7)
+        )
         ttk.Button(setup_actions, text="Copy HTTP setup", command=self.copy_http).pack(
             side="left", padx=(0, 7)
         )
@@ -342,11 +368,66 @@ class JustProxyDesktop:
 
     def _validated_settings(self) -> Optional[ConnectionSettings]:
         try:
-            return self._settings()
+            settings = self._settings()
         except ValueError as error:
             self._log("Configuration error: {0}".format(error))
             messagebox.showerror("Invalid connection settings", str(error))
             return None
+        self._persist_saved_connection(
+            SavedConnectionSettings(
+                host=settings.host,
+                control_port=settings.control_port,
+                proxy_username=settings.proxy_username,
+                proxy_port=settings.proxy_port,
+            )
+        )
+        return settings
+
+    def _persist_saved_connection(self, settings: SavedConnectionSettings) -> None:
+        if self.config_path is None:
+            return
+        try:
+            save_saved_connection(self.config_path, settings)
+        except Exception as error:
+            detail = " ".join(str(error).split()) or error.__class__.__name__
+            self._log(
+                "Could not save non-secret connection settings; continuing without "
+                "saving: {0}".format(detail)
+            )
+
+    def paste_setup(self) -> None:
+        try:
+            clipboard_text = self.root.clipboard_get()
+        except tk.TclError:
+            message = "The clipboard does not contain text."
+            self._log("Paste phone setup failed: {0}".format(message))
+            messagebox.showerror("Could not paste setup", message)
+            return
+
+        try:
+            setup = parse_android_setup(clipboard_text)
+        except ValueError as error:
+            self._log("Paste phone setup failed: {0}".format(error))
+            messagebox.showerror("Invalid JustProxy setup", str(error))
+            return
+
+        self.host_var.set(setup.host)
+        self.control_port_var.set(str(setup.control_port))
+        self.token_var.set(setup.token)
+        self.proxy_username_var.set(setup.proxy_username)
+        self.proxy_port_var.set(str(setup.proxy_port))
+        self._persist_saved_connection(
+            SavedConnectionSettings(
+                host=setup.host,
+                control_port=setup.control_port,
+                proxy_username=setup.proxy_username,
+                proxy_port=setup.proxy_port,
+            )
+        )
+        self._log(
+            "Phone setup pasted. Host, ports, and username may be saved; "
+            "the token remains in memory only."
+        )
 
     def get_status(self) -> None:
         settings = self._validated_settings()
@@ -651,6 +732,17 @@ class JustProxyDesktop:
         self.log_text.configure(state=tk.DISABLED)
 
     def close(self) -> None:
+        try:
+            saved_connection = SavedConnectionSettings.from_strings(
+                self.host_var.get(),
+                self.control_port_var.get(),
+                self.proxy_username_var.get(),
+                self.proxy_port_var.get(),
+            )
+        except ValueError:
+            pass
+        else:
+            self._persist_saved_connection(saved_connection)
         self.closed = True
         self.root.destroy()
 
@@ -683,7 +775,17 @@ def packaged_self_test() -> int:
         username=settings.proxy_username,
         password=settings.token,
     )
-    return 0 if proxies.get("https", "").startswith("http://") else 4
+    if not proxies.get("https", "").startswith("http://"):
+        return 4
+    pasted = parse_android_setup(
+        "JustProxy\n"
+        "HTTP proxy: http://self-test-user:self-test-token@127.0.0.1:8282\n"
+        "SOCKS5 proxy: socks5h://self-test-user:self-test-token@127.0.0.1:8282\n"
+        "Control API: http://127.0.0.1:8283\n"
+        "API token: self-test-token\n"
+        "USB setup: adb forward tcp:8282 tcp:8282"
+    )
+    return 0 if pasted.proxy_username == "self-test-user" else 5
 
 
 if __name__ == "__main__":

@@ -138,11 +138,15 @@ The desktop app can:
 - show service state, phone messages, current public IP, active connections, and traffic totals;
 - request a public-IP check, then poll for the asynchronous observation;
 - reconnect active proxy sessions, then poll for the resulting IP observation;
+- paste and validate the setup block copied by the Android app;
 - copy HTTP or SOCKS5 setup URLs.
 
 The phone accepts Check IP and Reconnect requests before the public-IP check finishes. The desktop polls status, metrics, and IP history once per second for up to about 12 seconds. If no fresh observation arrives in that window, use **Refresh** to check again; this is not evidence that the carrier changed the address.
 
-The executable does not contain phone credentials. Values are held only for the running desktop session.
+The executable does not contain phone credentials. It remembers only the phone host, control port,
+proxy username, and proxy port in `%APPDATA%\JustProxy\desktop.json`. The token/proxy password is
+never written to that file and is held by JustProxy Desktop only in process memory. Clipboard setup
+text also contains the token, so treat it as sensitive and clear the clipboard after use.
 
 Build it from source with:
 
@@ -241,7 +245,7 @@ The public-IP check contacts https://api.ipify.org over the selected Android net
 | Reconnect interval | 0 disables; 1 to 1440 minutes schedules session reconnect |
 | Idle timeout | Closes sessions with no activity |
 | Maximum connections | Bounds concurrent proxy sessions |
-| Data cap | Stops the current run after the configured proxy-stream MiB total |
+| Data cap | Stops the current proxy run after the configured proxy-stream MiB total; the run survives network flaps and resets on stop/start or process recreation |
 
 Private/loopback/link-local/multicast destinations and TCP port 25 are blocked by default to reduce SSRF, LAN scanning, and spam abuse. The advanced private-destination switch deliberately relaxes part of that policy.
 
@@ -313,7 +317,8 @@ The project includes integration tests for:
 - authenticated control API routes;
 - analytics sanitization, IP validation, live byte checkpoints, and local-day rollups;
 - Python SDK, CLI, error handling, and proxy URL helpers;
-- Windows desktop validation, traffic formatting, asynchronous IP-result polling, and honest rotation messaging.
+- Windows desktop validation, non-secret settings persistence, setup parsing, traffic formatting,
+  asynchronous IP-result polling, and honest rotation messaging.
 
 CI runs the Android/JVM, Python, and Windows suites, builds every platform artifact, clean-installs the wheel, and runs the frozen Windows executable's self-test. A real-device smoke test is still recommended across Pixel/AOSP and Samsung phones because hotspot and background-service behavior varies by manufacturer.
 
@@ -328,6 +333,9 @@ CI runs the Android/JVM, Python, and Windows suites, builds every platform artif
 - The bundled Windows executable is unsigned and may trigger SmartScreen; it is an alpha test build, not a production installer.
 - Public-IP checking depends on the external ipify endpoint.
 - Battery optimization and aggressive manufacturer task killers may stop long-running background networking despite the foreground service.
+- JustProxy requests a sticky service restart after an ordinary Android process kill, but Android and
+  manufacturer task managers do not guarantee recovery. A recreated process begins a new in-memory
+  data-cap run; the phone or carrier data meter remains authoritative.
 
 ## Project origins
 
