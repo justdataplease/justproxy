@@ -26,9 +26,10 @@ from .models import (
     Session,
     Sessions,
     Status,
+    WireGuardStatus,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0b1"
 
 __all__ = [
     "APIError",
@@ -49,6 +50,7 @@ __all__ = [
     "Session",
     "Sessions",
     "Status",
+    "WireGuardStatus",
     "http_proxy_url",
     "proxy_environment",
     "proxy_url",

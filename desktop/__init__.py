@@ -1,1 +1,0 @@
-"""JustProxy desktop companion."""

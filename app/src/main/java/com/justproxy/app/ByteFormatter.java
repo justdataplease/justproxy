@@ -25,4 +25,11 @@ final class ByteFormatter {
         }
         return String.format(Locale.ROOT, "%.2f %s", amount, UNITS[unitIndex]);
     }
+
+    static String formatTotal(long first, long second) {
+        if (first < 0 || second < 0) return "\u2014";
+        long total = Long.MAX_VALUE - first < second
+                ? Long.MAX_VALUE : first + second;
+        return format(total);
+    }
 }

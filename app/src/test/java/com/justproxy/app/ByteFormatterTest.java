@@ -20,4 +20,11 @@ public final class ByteFormatterTest {
     public void rejectsInvalidNegativeCounter() {
         assertEquals("\u2014", ByteFormatter.format(-1));
     }
+
+    @Test
+    public void combinedCountersSaturateInsteadOfOverflowing() {
+        assertEquals(ByteFormatter.format(Long.MAX_VALUE),
+                ByteFormatter.formatTotal(Long.MAX_VALUE - 1, 10));
+        assertEquals("\u2014", ByteFormatter.formatTotal(-1, 10));
+    }
 }

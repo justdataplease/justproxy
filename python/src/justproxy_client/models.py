@@ -57,6 +57,34 @@ class JsonModel(Mapping[str, Any]):
 
 
 @dataclass(frozen=True)
+class WireGuardStatus(JsonModel):
+    state: Optional[str] = None
+    message: Optional[str] = None
+    port: Optional[int] = None
+    configured_peers: Optional[int] = None
+    active_flows: Optional[int] = None
+    total_flows: Optional[int] = None
+    uploaded_bytes: Optional[int] = None
+    downloaded_bytes: Optional[int] = None
+    last_handshake_ms: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "WireGuardStatus":
+        return cls(
+            raw=dict(value),
+            state=_optional_str(value.get("state")),
+            message=_optional_str(value.get("message")),
+            port=_optional_int(value.get("port")),
+            configured_peers=_optional_int(value.get("configured_peers")),
+            active_flows=_optional_int(value.get("active_flows")),
+            total_flows=_optional_int(value.get("total_flows")),
+            uploaded_bytes=_optional_int(value.get("uploaded_bytes")),
+            downloaded_bytes=_optional_int(value.get("downloaded_bytes")),
+            last_handshake_ms=_optional_int(value.get("last_handshake_ms")),
+        )
+
+
+@dataclass(frozen=True)
 class Status(JsonModel):
     version: Optional[str] = None
     state: Optional[str] = None
@@ -70,9 +98,16 @@ class Status(JsonModel):
     started_at_ms: Optional[int] = None
     next_rotation_at_ms: Optional[int] = None
     rotation_guarantees_ip_change: bool = False
+    wireguard: Optional[WireGuardStatus] = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "Status":
+        wireguard_value = value.get("wireguard")
+        wireguard = (
+            WireGuardStatus.from_dict(wireguard_value)
+            if isinstance(wireguard_value, Mapping)
+            else None
+        )
         return cls(
             raw=dict(value),
             version=_optional_str(value.get("version")),
@@ -89,6 +124,7 @@ class Status(JsonModel):
             rotation_guarantees_ip_change=_bool(
                 value.get("rotation_guarantees_ip_change"), False
             ),
+            wireguard=wireguard,
         )
 
 
@@ -102,6 +138,10 @@ class Metrics(JsonModel):
     lifetime_downloaded_bytes: Optional[int] = None
     lifetime_sessions: Optional[int] = None
     ip_change_count: Optional[int] = None
+    wireguard_uploaded_bytes: Optional[int] = None
+    wireguard_downloaded_bytes: Optional[int] = None
+    wireguard_active_flows: Optional[int] = None
+    wireguard_total_flows: Optional[int] = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "Metrics":
@@ -119,6 +159,18 @@ class Metrics(JsonModel):
             ),
             lifetime_sessions=_optional_int(value.get("lifetime_sessions")),
             ip_change_count=_optional_int(value.get("ip_change_count")),
+            wireguard_uploaded_bytes=_optional_int(
+                value.get("wireguard_uploaded_bytes")
+            ),
+            wireguard_downloaded_bytes=_optional_int(
+                value.get("wireguard_downloaded_bytes")
+            ),
+            wireguard_active_flows=_optional_int(
+                value.get("wireguard_active_flows")
+            ),
+            wireguard_total_flows=_optional_int(
+                value.get("wireguard_total_flows")
+            ),
         )
 
 

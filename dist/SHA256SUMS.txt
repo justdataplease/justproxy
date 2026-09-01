@@ -1,4 +1,3 @@
-f6630c65d42bee5cbfb3e7886ec16e9a1074b6aeab4a7dd6dba689f013ef227b  android/JustProxy-android-debug.apk
-08c6e2f7fdf01734092657173030efee02342191c705f024c51b73b18d2443cb  windows/JustProxyDesktop.exe
-730b5852cfcd75251213bc50ecf3b4c60c14f356a1ffa2a48c955f7f76b0382f  python/justproxy_client-0.1.0-py3-none-any.whl
-5dd8d3ea64f0fbdae7a6adc6e56eb2c898e1042dd230b5b662022c576f0285e2  python/justproxy_client-0.1.0.tar.gz
+6e4262d505e89b2a2a600919e7ae29285bbba5cdc99da56a4f9b6827fec88015  android/JustProxy-android-debug.apk
+727c0450d7377175d0bc5556356c796e6bb0d30850d829f0cc220776ef097976  python/justproxy_client-0.2.0b1-py3-none-any.whl
+a3b698958e1825cf3d9bc515dc268810c0e25ccddb50bc26d36720d85248ff07  python/justproxy_client-0.2.0b1.tar.gz

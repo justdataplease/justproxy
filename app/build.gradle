@@ -7,18 +7,27 @@ if (externalBuildRoot != null && !externalBuildRoot.trim().isEmpty()) {
     layout.buildDirectory = file("${externalBuildRoot}/app")
 }
 
+def wireGuardCrateDir = rootProject.file('native/wireguard-gateway')
+def wireGuardJniDir = layout.buildDirectory.dir('generated/wireguard-jni')
+def wireGuardCargoTargetDir = layout.buildDirectory.dir('native-cargo-target')
+
 android {
     namespace 'com.justproxy.app'
     compileSdk 35
+    ndkVersion '28.2.13676358'
 
     defaultConfig {
         applicationId 'com.justproxy.app'
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName '0.1.0'
+        versionCode 2
+        versionName '0.2.0-beta.1'
 
         testInstrumentationRunner 'android.test.InstrumentationTestRunner'
+
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+        }
     }
 
     buildTypes {
@@ -36,8 +45,69 @@ android {
     testOptions {
         unitTests.returnDefaultValues = true
     }
+
+    sourceSets {
+        main {
+            jniLibs.srcDir wireGuardJniDir
+        }
+    }
 }
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'
+}
+
+tasks.register('buildWireGuardNative', Exec) {
+    group = 'build'
+    description = 'Cross-compiles the Rust WireGuard gateway for Android ABIs.'
+    workingDir wireGuardCrateDir
+    inputs.file new File(wireGuardCrateDir, 'Cargo.toml')
+    inputs.file new File(wireGuardCrateDir, 'Cargo.lock')
+    inputs.dir new File(wireGuardCrateDir, 'src')
+    outputs.dir wireGuardJniDir
+
+    doFirst {
+        File output = wireGuardJniDir.get().asFile
+        delete output
+        output.mkdirs()
+
+        environment 'CARGO_TARGET_DIR', wireGuardCargoTargetDir.get().asFile.absolutePath
+        String ndkHome = System.getenv('ANDROID_NDK_HOME')
+        if (ndkHome == null || ndkHome.trim().isEmpty()) {
+            String sdkRoot = System.getenv('ANDROID_SDK_ROOT')
+            if (sdkRoot == null || sdkRoot.trim().isEmpty()) {
+                sdkRoot = System.getenv('ANDROID_HOME')
+            }
+            if (sdkRoot != null && !sdkRoot.trim().isEmpty()) {
+                ndkHome = new File(sdkRoot, 'ndk/28.2.13676358').absolutePath
+            }
+        }
+        if (ndkHome != null && !ndkHome.trim().isEmpty()) {
+            environment 'ANDROID_NDK_HOME', ndkHome
+        }
+
+        commandLine(System.getenv('CARGO') ?: 'cargo',
+                'ndk', '--platform', '26',
+                '-t', 'arm64-v8a',
+                '-t', 'armeabi-v7a',
+                '-t', 'x86_64',
+                '-o', output.absolutePath,
+                'build', '--locked', '--release')
+    }
+
+    doLast {
+        // cargo-ndk also copies BoringTun's standalone cdylib artifact even though
+        // JustProxy links it statically and has no DT_NEEDED entry for it.
+        fileTree(wireGuardJniDir).matching {
+            include '**/libboringtun-*.so'
+        }.files.each { File unused -> delete unused }
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name.startsWith('merge')
+            && (task.name.endsWith('NativeLibs')
+            || task.name.endsWith('JniLibFolders'))) {
+        task.dependsOn tasks.named('buildWireGuardNative')
+    }
 }

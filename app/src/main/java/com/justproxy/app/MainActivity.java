@@ -19,6 +19,8 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.justproxy.app.wireguard.WireGuardPeersActivity;
+
 import java.util.List;
 
 public final class MainActivity extends Activity {
@@ -43,6 +45,9 @@ public final class MainActivity extends Activity {
     private TextView lifetimeTrafficText;
     private TextView activeConnectionsText;
     private TextView analyticsDetailText;
+    private TextView wireGuardStatusText;
+    private TextView wireGuardEndpointText;
+    private TextView wireGuardTrafficText;
     private Button startStopButton;
     private Button rotateButton;
     private Button refreshIpButton;
@@ -50,7 +55,10 @@ public final class MainActivity extends Activity {
     private Switch lanAccessSwitch;
     private Switch cellularOnlySwitch;
     private Switch privateDestinationsSwitch;
+    private Switch wireGuardEnabledSwitch;
+    private Switch legacyProxyEnabledSwitch;
     private EditText portInput;
+    private EditText wireGuardPortInput;
     private EditText rotationInput;
     private EditText idleInput;
     private EditText maxConnectionsInput;
@@ -81,6 +89,9 @@ public final class MainActivity extends Activity {
         lifetimeTrafficText = findViewById(R.id.lifetimeTrafficText);
         activeConnectionsText = findViewById(R.id.activeConnectionsText);
         analyticsDetailText = findViewById(R.id.analyticsDetailText);
+        wireGuardStatusText = findViewById(R.id.wireGuardStatusText);
+        wireGuardEndpointText = findViewById(R.id.wireGuardEndpointText);
+        wireGuardTrafficText = findViewById(R.id.wireGuardTrafficText);
         startStopButton = findViewById(R.id.startStopButton);
         rotateButton = findViewById(R.id.rotateButton);
         refreshIpButton = findViewById(R.id.refreshIpButton);
@@ -88,7 +99,10 @@ public final class MainActivity extends Activity {
         lanAccessSwitch = findViewById(R.id.lanAccessSwitch);
         cellularOnlySwitch = findViewById(R.id.cellularOnlySwitch);
         privateDestinationsSwitch = findViewById(R.id.privateDestinationsSwitch);
+        wireGuardEnabledSwitch = findViewById(R.id.wireGuardEnabledSwitch);
+        legacyProxyEnabledSwitch = findViewById(R.id.legacyProxyEnabledSwitch);
         portInput = findViewById(R.id.portInput);
+        wireGuardPortInput = findViewById(R.id.wireGuardPortInput);
         rotationInput = findViewById(R.id.rotationInput);
         idleInput = findViewById(R.id.idleInput);
         maxConnectionsInput = findViewById(R.id.maxConnectionsInput);
@@ -99,13 +113,17 @@ public final class MainActivity extends Activity {
         lanAccessSwitch.setChecked(settings.isLanAccessEnabled());
         cellularOnlySwitch.setChecked(settings.isCellularOnly());
         privateDestinationsSwitch.setChecked(settings.isPrivateDestinationAccessEnabled());
+        wireGuardEnabledSwitch.setChecked(settings.isWireGuardEnabled());
+        legacyProxyEnabledSwitch.setChecked(settings.isLegacyProxyEnabled());
         portInput.setText(String.valueOf(settings.getPort()));
+        wireGuardPortInput.setText(String.valueOf(settings.getWireGuardPort()));
         rotationInput.setText(String.valueOf(settings.getRotationMinutes()));
         idleInput.setText(String.valueOf(settings.getIdleTimeoutSeconds()));
         maxConnectionsInput.setText(String.valueOf(settings.getMaxConnections()));
         dataCapInput.setText(String.valueOf(settings.getDataCapMiB()));
         renderCredentials();
         renderEndpoints();
+        renderWireGuardEndpoint();
     }
 
     private void installActions() {
@@ -119,8 +137,8 @@ public final class MainActivity extends Activity {
             }
         });
         rotateButton.setOnClickListener(view -> new AlertDialog.Builder(this)
-                .setTitle("Reconnect proxy sessions?")
-                .setMessage("Active TCP sessions will close. This does not force the carrier to assign a new public IP.")
+                .setTitle("Reconnect active connections?")
+                .setMessage("Active proxy sessions and WireGuard flows will close. This does not force the carrier to assign a new public IP.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Reconnect", (dialog, which) ->
                         sendCommand(ProxyService.ACTION_ROTATE, false))
@@ -141,9 +159,18 @@ public final class MainActivity extends Activity {
                 }).show());
         findViewById(R.id.activityButton).setOnClickListener(view ->
                 startActivity(new Intent(this, AnalyticsActivity.class)));
+        findViewById(R.id.manageWireGuardButton).setOnClickListener(view ->
+                openWireGuardPeers());
         lanAccessSwitch.setOnCheckedChangeListener((button, checked) -> renderEndpoints());
+        legacyProxyEnabledSwitch.setOnCheckedChangeListener(
+                (button, checked) -> renderEndpoints());
+        wireGuardEnabledSwitch.setOnCheckedChangeListener(
+                (button, checked) -> renderWireGuardEndpoint());
         portInput.setOnFocusChangeListener((view, focused) -> {
             if (!focused) renderEndpoints();
+        });
+        wireGuardPortInput.setOnFocusChangeListener((view, focused) -> {
+            if (!focused) renderWireGuardEndpoint();
         });
     }
 
@@ -156,20 +183,45 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void openWireGuardPeers() {
+        try {
+            if (!ProxyService.getStatus().isActive()) {
+                saveSettings();
+            }
+            startActivity(new Intent(this, WireGuardPeersActivity.class));
+        } catch (IllegalArgumentException exception) {
+            Toast.makeText(this, exception.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void saveSettings() {
         int port = number(portInput, "Proxy port");
+        int wireGuardPort = number(wireGuardPortInput, "WireGuard port");
         int rotation = number(rotationInput, "Reconnect interval");
         int idle = number(idleInput, "Idle timeout");
         int max = number(maxConnectionsInput, "Maximum connections");
         long cap = longNumber(dataCapInput, "Data cap");
         requireRange(port, 1024, 65534, "Proxy port");
+        requireRange(wireGuardPort, 1024, 65535, "WireGuard port");
         requireRange(rotation, 0, 1440, "Reconnect interval");
         requireRange(idle, 10, 3600, "Idle timeout");
         requireRange(max, 1, 64, "Maximum connections");
         if (cap < 0 || cap > 1_048_576L) {
             throw new IllegalArgumentException("Data cap must be 0 to 1048576 MiB");
         }
+        if (!wireGuardEnabledSwitch.isChecked() && !legacyProxyEnabledSwitch.isChecked()) {
+            throw new IllegalArgumentException(
+                    "Enable WireGuard or the legacy HTTP / SOCKS5 proxy");
+        }
+        if (wireGuardEnabledSwitch.isChecked()
+                && (wireGuardPort == port || wireGuardPort == port + 1)) {
+            throw new IllegalArgumentException(
+                    "WireGuard port must differ from the proxy and control ports");
+        }
         settings.setPort(port);
+        settings.setWireGuardPort(wireGuardPort);
+        settings.setWireGuardEnabled(wireGuardEnabledSwitch.isChecked());
+        settings.setLegacyProxyEnabled(legacyProxyEnabledSwitch.isChecked());
         settings.setRotationMinutes(rotation);
         settings.setIdleTimeoutSeconds(idle);
         settings.setMaxConnections(max);
@@ -178,6 +230,7 @@ public final class MainActivity extends Activity {
         settings.setCellularOnly(cellularOnlySwitch.isChecked());
         settings.setPrivateDestinationAccessEnabled(privateDestinationsSwitch.isChecked());
         renderEndpoints();
+        renderWireGuardEndpoint();
     }
 
     private void sendCommand(String action, boolean foreground) {
@@ -197,6 +250,11 @@ public final class MainActivity extends Activity {
 
     private void renderEndpoints() {
         int port = parseOrDefault(portInput, settings.getPort());
+        if (!legacyProxyEnabledSwitch.isChecked()) {
+            endpointText.setText("Legacy proxy disabled");
+            controlEndpointText.setText("Python control API still uses port " + (port + 1));
+            return;
+        }
         StringBuilder endpoints = new StringBuilder("USB: 127.0.0.1:").append(port);
         if (lanAccessSwitch.isChecked()) {
             List<NetworkAddresses.LocalAddress> addresses =
@@ -215,6 +273,28 @@ public final class MainActivity extends Activity {
                 + " with the password as its Bearer token");
     }
 
+    private void renderWireGuardEndpoint() {
+        int port = parseOrDefault(wireGuardPortInput, settings.getWireGuardPort());
+        if (!wireGuardEnabledSwitch.isChecked()) {
+            wireGuardEndpointText.setText("Gateway disabled");
+            return;
+        }
+        List<NetworkAddresses.LocalAddress> addresses =
+                NetworkAddresses.localIpv4Addresses();
+        if (addresses.isEmpty()) {
+            wireGuardEndpointText.setText(
+                    "Connect the phone to the PC's LAN or enable the phone hotspot");
+            return;
+        }
+        StringBuilder text = new StringBuilder();
+        for (NetworkAddresses.LocalAddress address : addresses) {
+            if (text.length() > 0) text.append('\n');
+            text.append(address.getLabel()).append(": ")
+                    .append(address.getAddress()).append(':').append(port).append("/udp");
+        }
+        wireGuardEndpointText.setText(text);
+    }
+
     private void renderStatus(ProxyStatus status) {
         statusChip.setText(status.state.name());
         boolean running = status.state == ProxyStatus.State.RUNNING;
@@ -222,19 +302,23 @@ public final class MainActivity extends Activity {
                 ? R.drawable.status_running : R.drawable.status_stopped);
         statusChip.setTextColor(getColor(running ? R.color.teal_dark : R.color.slate));
         statusMessage.setText(status.message + ("-".equals(status.egress) ? "" : "  |  " + status.egress));
-        startStopButton.setText(status.isActive() ? "Stop proxy" : "Start proxy");
+        startStopButton.setText(status.isActive() ? "Stop JustProxy" : "Start JustProxy");
         startStopButton.setBackgroundTintList(getColorStateList(status.isActive()
                 ? R.color.danger : R.color.teal_dark));
         rotateButton.setEnabled(running);
         refreshIpButton.setEnabled(status.isActive());
         publicIpText.setText(status.publicIp);
-        runTrafficText.setText(ByteFormatter.format(
-                status.runUploadedBytes + status.runDownloadedBytes));
-        todayTrafficText.setText(ByteFormatter.format(
-                status.todayUploadedBytes + status.todayDownloadedBytes));
-        lifetimeTrafficText.setText(ByteFormatter.format(
-                status.lifetimeUploadedBytes + status.lifetimeDownloadedBytes));
+        runTrafficText.setText(ByteFormatter.formatTotal(
+                status.runUploadedBytes, status.runDownloadedBytes));
+        todayTrafficText.setText(ByteFormatter.formatTotal(
+                status.todayUploadedBytes, status.todayDownloadedBytes));
+        lifetimeTrafficText.setText(ByteFormatter.formatTotal(
+                status.lifetimeUploadedBytes, status.lifetimeDownloadedBytes));
         activeConnectionsText.setText(status.activeConnections + " active");
+        wireGuardStatusText.setText(status.wireGuard.message);
+        wireGuardTrafficText.setText(status.wireGuard.activeFlows + " active flows  |  "
+                + ByteFormatter.formatTotal(status.wireGuard.uploadedBytes,
+                status.wireGuard.downloadedBytes) + " this run");
         analyticsDetailText.setText("Up " + ByteFormatter.format(status.lifetimeUploadedBytes)
                 + "  |  Down " + ByteFormatter.format(status.lifetimeDownloadedBytes)
                 + "  |  " + status.lifetimeSessions + " sessions"
@@ -246,7 +330,10 @@ public final class MainActivity extends Activity {
         lanAccessSwitch.setEnabled(enabled);
         cellularOnlySwitch.setEnabled(enabled);
         privateDestinationsSwitch.setEnabled(enabled);
+        wireGuardEnabledSwitch.setEnabled(enabled);
+        legacyProxyEnabledSwitch.setEnabled(enabled);
         portInput.setEnabled(enabled);
+        wireGuardPortInput.setEnabled(enabled);
         rotationInput.setEnabled(enabled);
         idleInput.setEnabled(enabled);
         maxConnectionsInput.setEnabled(enabled);
@@ -323,7 +410,7 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Before you start JustProxy")
                 .setMessage("Use it only for traffic you own or are authorized to route. Mobile data charges, battery use, carrier rules, and destination terms still apply.\n\n"
-                        + "JustProxy records byte counts, client/target metadata, and public-IP observations on this phone. It never records traffic contents or TLS secrets.")
+                        + "JustProxy records byte counts, connection metadata, and public-IP observations on this phone. It never records traffic contents, TLS secrets, or WireGuard private keys in analytics.")
                 .setNegativeButton("Not now", null)
                 .setPositiveButton("I understand", (dialog, which) -> {
                     settings.setAcceptedSafetyNotice(true);

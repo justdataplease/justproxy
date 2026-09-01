@@ -19,6 +19,7 @@ import javax.crypto.spec.GCMParameterSpec;
 /** Centralized, validated app preferences and encrypted proxy credentials. */
 public final class AppSettings {
     public static final int DEFAULT_PORT = 8282;
+    public static final int DEFAULT_WIREGUARD_PORT = 51820;
     private static final String PREFS = "settings";
     private static final String SECRETS = "secrets";
     private static final String KEY_ALIAS = "justproxy.credentials.v1";
@@ -39,6 +40,32 @@ public final class AppSettings {
 
     public void setPort(int value) {
         preferences.edit().putInt("port", bounded(value, 1024, 65534, DEFAULT_PORT)).apply();
+    }
+
+    public boolean isLegacyProxyEnabled() {
+        return preferences.getBoolean("legacy_proxy_enabled", true);
+    }
+
+    public void setLegacyProxyEnabled(boolean value) {
+        preferences.edit().putBoolean("legacy_proxy_enabled", value).apply();
+    }
+
+    public boolean isWireGuardEnabled() {
+        return preferences.getBoolean("wireguard_enabled", false);
+    }
+
+    public void setWireGuardEnabled(boolean value) {
+        preferences.edit().putBoolean("wireguard_enabled", value).apply();
+    }
+
+    public int getWireGuardPort() {
+        return bounded(preferences.getInt("wireguard_port", DEFAULT_WIREGUARD_PORT),
+                1024, 65535, DEFAULT_WIREGUARD_PORT);
+    }
+
+    public void setWireGuardPort(int value) {
+        preferences.edit().putInt("wireguard_port",
+                bounded(value, 1024, 65535, DEFAULT_WIREGUARD_PORT)).apply();
     }
 
     public boolean isLanAccessEnabled() {

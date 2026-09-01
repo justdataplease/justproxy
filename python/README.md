@@ -21,7 +21,7 @@ From a clone of this repository:
 python -m pip install ./python
 ```
 
-Or directly from the public repository after it is pushed:
+Or directly from the public repository:
 
 ```console
 python -m pip install "git+https://github.com/justdataplease/justproxy.git#subdirectory=python"

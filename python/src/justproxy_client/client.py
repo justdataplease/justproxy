@@ -319,7 +319,7 @@ class JustProxyClient:
         headers = {
             "Accept": "application/json",
             "Authorization": "Bearer {0}".format(self.token),
-            "User-Agent": "justproxy-client/0.1.0",
+            "User-Agent": "justproxy-client/0.2.0b1",
         }
         if body is not None:
             headers["Content-Type"] = "application/json"

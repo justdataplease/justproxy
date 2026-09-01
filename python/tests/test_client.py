@@ -19,6 +19,7 @@ from justproxy_client import (  # noqa: E402
     ConfigurationError,
     InvalidResponseError,
     JustProxyClient,
+    WireGuardStatus,
     http_proxy_url,
     proxy_environment,
     requests_proxy_urls,
@@ -28,7 +29,7 @@ from justproxy_client.cli import main as cli_main  # noqa: E402
 
 
 STATUS = {
-    "version": "0.1.0",
+    "version": "v1",
     "state": "running",
     "message": "Proxy is ready",
     "listen_host": "0.0.0.0",
@@ -40,6 +41,18 @@ STATUS = {
     "started_at_ms": 1_700_000_000_000,
     "next_rotation_at_ms": 1_700_000_060_000,
     "rotation_guarantees_ip_change": False,
+    "wireguard": {
+        "state": "running",
+        "message": "WireGuard gateway is running",
+        "port": 51820,
+        "configured_peers": 1,
+        "active_flows": 3,
+        "total_flows": 9,
+        "uploaded_bytes": 1_000,
+        "downloaded_bytes": 2_000,
+        "last_handshake_ms": 1_700_000_050_000,
+        "future_wireguard_field": {"preserved": True},
+    },
     "future_status_field": {"preserved": True},
 }
 
@@ -52,6 +65,10 @@ METRICS = {
     "lifetime_downloaded_bytes": 60,
     "lifetime_sessions": 7,
     "ip_change_count": 3,
+    "wireguard_uploaded_bytes": 1_000,
+    "wireguard_downloaded_bytes": 2_000,
+    "wireguard_active_flows": 3,
+    "wireguard_total_flows": 9,
 }
 
 IP_HISTORY = {
@@ -197,10 +214,28 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(status.proxy_port, 8888)
             self.assertFalse(status.rotation_guarantees_ip_change)
             self.assertEqual(status["future_status_field"], {"preserved": True})
+            self.assertIsInstance(status.wireguard, WireGuardStatus)
+            wireguard = status.wireguard
+            self.assertIsNotNone(wireguard)
+            self.assertEqual(wireguard.state, "running")
+            self.assertEqual(wireguard.port, 51820)
+            self.assertEqual(wireguard.configured_peers, 1)
+            self.assertEqual(wireguard.active_flows, 3)
+            self.assertEqual(wireguard.total_flows, 9)
+            self.assertEqual(wireguard.uploaded_bytes, 1_000)
+            self.assertEqual(wireguard.downloaded_bytes, 2_000)
+            self.assertEqual(wireguard.last_handshake_ms, 1_700_000_050_000)
+            self.assertEqual(
+                wireguard["future_wireguard_field"], {"preserved": True}
+            )
 
             metrics = client.metrics()
             self.assertEqual(metrics.run_downloaded_bytes, 20)
             self.assertEqual(metrics.lifetime_sessions, 7)
+            self.assertEqual(metrics.wireguard_uploaded_bytes, 1_000)
+            self.assertEqual(metrics.wireguard_downloaded_bytes, 2_000)
+            self.assertEqual(metrics.wireguard_active_flows, 3)
+            self.assertEqual(metrics.wireguard_total_flows, 9)
 
             history = client.ip_history()
             self.assertEqual(len(history.items), 2)
@@ -250,6 +285,29 @@ class ClientTests(unittest.TestCase):
                 for request in post_requests
             )
         )
+
+    def test_wireguard_fields_are_optional_for_legacy_responses(self) -> None:
+        with FakeAPI() as api:
+            api.responses[("GET", "/v1/status")] = (
+                200,
+                {"state": "running", "legacy_unknown": "preserved"},
+            )
+            api.responses[("GET", "/v1/metrics")] = (
+                200,
+                {"run_uploaded_bytes": 12},
+            )
+            client = JustProxyClient("secret-token", api.url)
+
+            status = client.status()
+            self.assertIsNone(status.wireguard)
+            self.assertEqual(status["legacy_unknown"], "preserved")
+
+            metrics = client.metrics()
+            self.assertEqual(metrics.run_uploaded_bytes, 12)
+            self.assertIsNone(metrics.wireguard_uploaded_bytes)
+            self.assertIsNone(metrics.wireguard_downloaded_bytes)
+            self.assertIsNone(metrics.wireguard_active_flows)
+            self.assertIsNone(metrics.wireguard_total_flows)
 
     def test_authentication_error_has_status_and_payload(self) -> None:
         with FakeAPI() as api:

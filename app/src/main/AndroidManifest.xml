@@ -32,6 +32,10 @@
             android:name=".AnalyticsActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".wireguard.WireGuardPeersActivity"
+            android:exported="false" />
+
         <service
             android:name=".ProxyService"
             android:exported="false"
@@ -39,7 +43,7 @@
             android:stopWithTask="false">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User-controlled authenticated HTTP and SOCKS proxy for the owner's computer" />
+                android:value="User-controlled WireGuard gateway and authenticated HTTP/SOCKS proxy for the owner's computer" />
         </service>
     </application>
 

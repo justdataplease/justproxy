@@ -1,5 +1,7 @@
 package com.justproxy.app;
 
+import com.justproxy.app.wireguard.WireGuardGatewayStatus;
+
 /** Immutable service state safe for the activity to read from the main thread. */
 public final class ProxyStatus {
     public enum State { STOPPED, STARTING, RUNNING, PAUSED, ERROR }
@@ -20,6 +22,7 @@ public final class ProxyStatus {
     public final long ipChangeCount;
     public final long startedAtMillis;
     public final long nextRotationAtMillis;
+    public final WireGuardGatewayStatus wireGuard;
 
     public ProxyStatus(State state, String message, String listenAddress, int port,
                        String egress, String publicIp, long runUploadedBytes,
@@ -27,7 +30,7 @@ public final class ProxyStatus {
                        long todayDownloadedBytes, long lifetimeUploadedBytes,
                        long lifetimeDownloadedBytes, int activeConnections,
                        long lifetimeSessions, long ipChangeCount, long startedAtMillis,
-                       long nextRotationAtMillis) {
+                       long nextRotationAtMillis, WireGuardGatewayStatus wireGuard) {
         this.state = state;
         this.message = valueOrDash(message);
         this.listenAddress = valueOrDash(listenAddress);
@@ -45,15 +48,19 @@ public final class ProxyStatus {
         this.ipChangeCount = ipChangeCount;
         this.startedAtMillis = startedAtMillis;
         this.nextRotationAtMillis = nextRotationAtMillis;
+        this.wireGuard = wireGuard == null
+                ? WireGuardGatewayStatus.disabled() : wireGuard;
     }
 
     public static ProxyStatus stopped() {
         return new ProxyStatus(State.STOPPED, "Proxy is off", "-", 0, "-", "-",
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                WireGuardGatewayStatus.disabled());
     }
 
     public boolean isActive() {
-        return state == State.STARTING || state == State.RUNNING || state == State.PAUSED;
+        return state == State.STARTING || state == State.RUNNING
+                || state == State.PAUSED || state == State.ERROR;
     }
 
     private static String valueOrDash(String value) {

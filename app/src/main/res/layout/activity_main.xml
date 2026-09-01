@@ -42,7 +42,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="7dp"
-                android:text="An authenticated HTTP + SOCKS5 proxy with cellular routing and private traffic analytics."
+                android:text="An encrypted WireGuard gateway plus authenticated HTTP + SOCKS5 proxy, with cellular routing and private analytics."
                 android:textColor="#BFD0DC"
                 android:textSize="14sp" />
         </LinearLayout>
@@ -71,7 +71,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Proxy service" />
+                        android:text="JustProxy service" />
 
                     <TextView
                         android:id="@+id/statusChip"
@@ -105,7 +105,7 @@
                         android:layout_height="48dp"
                         android:layout_weight="1"
                         android:backgroundTint="@color/teal_dark"
-                        android:text="Start proxy"
+                        android:text="Start JustProxy"
                         android:textColor="@color/white"
                         android:textStyle="bold" />
 
@@ -133,7 +133,64 @@
                     style="@style/JustProxy.SectionTitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Connect your PC" />
+                    android:text="WireGuard gateway - Beta" />
+
+                <TextView
+                    android:id="@+id/wireGuardStatusText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Disabled"
+                    android:textColor="@color/slate"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/wireGuardEndpointText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:fontFamily="monospace"
+                    android:text="No LAN / hotspot endpoint detected"
+                    android:textColor="@color/navy"
+                    android:textIsSelectable="true"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/wireGuardTrafficText"
+                    style="@style/JustProxy.Caption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="0 active flows  |  0 B this run" />
+
+                <TextView
+                    style="@style/JustProxy.Caption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="Import the exported .conf into the official WireGuard app on your computer. One computer profile is supported in this beta." />
+
+                <Button
+                    android:id="@+id/manageWireGuardButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="Create / export computer profile" />
+            </LinearLayout>
+
+            <LinearLayout
+                style="@style/JustProxy.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:orientation="vertical">
+
+                <TextView
+                    style="@style/JustProxy.SectionTitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Legacy HTTP / SOCKS5 proxy - Optional" />
 
                 <TextView
                     android:id="@+id/endpointText"
@@ -330,11 +387,25 @@
                     android:text="Controls" />
 
                 <Switch
+                    android:id="@+id/wireGuardEnabledSwitch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Enable WireGuard gateway (full computer traffic)" />
+
+                <Switch
+                    android:id="@+id/legacyProxyEnabledSwitch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:checked="true"
+                    android:text="Enable legacy HTTP / SOCKS5 proxy" />
+
+                <Switch
                     android:id="@+id/lanAccessSwitch"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:text="Allow hotspot / LAN clients" />
+                    android:text="Legacy proxy/control: allow LAN clients" />
 
                 <Switch
                     android:id="@+id/cellularOnlySwitch"
@@ -347,7 +418,10 @@
                     android:id="@+id/privateDestinationsSwitch"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Allow private / LAN destinations (advanced)" />
+                    android:text="Legacy proxy: allow private / LAN destinations" />
+
+                <TextView style="@style/JustProxy.Caption" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:text="WIREGUARD UDP PORT" />
+                <EditText android:id="@+id/wireGuardPortInput" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="number" android:maxLength="5" android:singleLine="true" />
 
                 <TextView style="@style/JustProxy.Caption" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:text="PROXY PORT" />
                 <EditText android:id="@+id/portInput" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="number" android:maxLength="5" android:singleLine="true" />
@@ -379,7 +453,7 @@
                 android:paddingStart="8dp"
                 android:paddingEnd="8dp"
                 android:paddingBottom="24dp"
-                android:text="Use only on devices, networks, and services you are authorized to access. Proxy authentication is not itself encrypted; prefer USB or a trusted hotspot/LAN."
+                android:text="Use only on devices, networks, and services you are authorized to access. WireGuard traffic is encrypted; legacy proxy authentication is not, so use that mode only over a trusted LAN or USB."
                 android:textColor="@color/slate"
                 android:textSize="12sp" />
         </LinearLayout>

@@ -1,0 +1,40 @@
+[package]
+name = "justproxy-wireguard-gateway"
+version = "0.2.0-beta.1"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Unrooted userspace WireGuard exit gateway for JustProxy"
+
+[lib]
+name = "justproxy_wireguard_gateway"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow = "1.0.100"
+base64 = "0.21.7"
+boringtun = "=0.6.0"
+bytes = "1.10.1"
+getrandom = "0.2.16"
+jni = { version = "0.21.1", default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+smoltcp = { version = "=0.10.0", default-features = false, features = [
+    "socket",
+    "socket-tcp",
+    "socket-udp",
+    "std",
+    "proto-ipv4",
+    "proto-ipv4-fragmentation",
+    "proto-ipv6",
+    "fragmentation-buffer-size-65536",
+    "assembler-max-segment-count-32",
+    "medium-ip",
+] }
+tokio = { version = "1.48.0", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = "symbols"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "justproxy-client"
-version = "0.1.0"
+version = "0.2.0b1"
 description = "Zero-dependency Python client and CLI for the JustProxy control API"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -13,9 +13,9 @@ license-files = ["LICENSE"]
 authors = [
   { name = "Just Data Please" },
 ]
-keywords = ["proxy", "android", "http", "socks5", "justproxy"]
+keywords = ["proxy", "wireguard", "android", "http", "socks5", "justproxy"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",

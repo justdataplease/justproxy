@@ -1,31 +1,33 @@
 # JustProxy
 
-JustProxy turns an Android phone into an authenticated HTTP/HTTPS CONNECT and SOCKS5 proxy for a computer. Proxy-aware PC traffic enters over USB, a trusted Wi-Fi LAN, or the phone hotspot, then exits through the Android network selected in the app.
+JustProxy v0.2 turns an unrooted Android phone into a local WireGuard Internet gateway. Export a standard `.conf` file from the phone, import it into the official WireGuard client on a computer or another mobile device, and route that device's IPv4 and IPv6 TCP/UDP traffic through the phone's selected Android network. The existing authenticated HTTP/HTTPS CONNECT and SOCKS5 proxy remains available as an optional compatibility mode.
 
-> Alpha distribution: the Android APK is debug-signed, the Windows executable is unsigned, and the Python package is pre-1.0. These artifacts are for testing, not a production or app-store release. Read the security and limitations sections before using LAN mode.
+> Beta distribution: the Android APK is debug-signed and the Python package is pre-1.0. The WireGuard gateway is a one-peer beta. These artifacts are for testing, not a production or app-store release.
 
 ## What is included
 
 | Component | Purpose |
 | --- | --- |
-| Android app | Runs the proxy, pins egress to cellular when requested, rotates sessions, and stores local traffic/IP analytics |
-| Windows desktop app | Graphical status, traffic, public-IP, reconnect, and setup controls |
-| Python package and CLI | Scriptable authenticated control API client |
-| Distribution folder | Test APK, unsigned Windows executable, Python wheel/source archive, and checksums |
+| Android app | Runs the userspace WireGuard gateway, optional legacy proxy, cellular routing, profile export, and local traffic/IP analytics |
+| WireGuard client profile | Standard dual-stack full-tunnel `.conf` imported into an official WireGuard client |
+| Python package and CLI | Scriptable authenticated control API client and legacy proxy helpers |
+| Distribution folder | Test APK, Python wheel/source archive, and checksums |
 
-JustProxy is designed for a phone and PC you own or are authorized to use. It is not a residential-proxy marketplace, bandwidth-sharing client, interception tool, or public relay.
+The former custom Windows desktop executable has been removed. JustProxy now uses the official WireGuard applications for system-wide tunnelling; the Android UI and optional Python SDK provide status and control.
+
+JustProxy is designed for a phone and client device you own or are authorized to use. It is not a residential-proxy marketplace, bandwidth-sharing client, interception tool, or public relay.
 
 ## How it works
 
 ~~~text
-PC application
+Official WireGuard client on the computer/device
   |
-  | HTTP proxy or SOCKS5 (authenticated)
-  | USB/ADB, phone hotspot, or trusted LAN
+  | encrypted WireGuard UDP over the same LAN or phone hotspot
   v
-JustProxy Android foreground service
+JustProxy listener on the phone's Wi-Fi/hotspot address
   |
-  | DNS and TCP sockets bound to the chosen Android Network
+  | userspace IPv4/IPv6 TCP and UDP forwarding
+  | upstream sockets bound to the selected Android Network
   v
 Cellular network (default) or Android system-default network
   |
@@ -33,25 +35,26 @@ Cellular network (default) or Android system-default network
 Internet destination
 ~~~
 
-HTTPS is passed through with HTTP CONNECT. JustProxy does not install a certificate, decrypt TLS, or inspect payload contents.
+The phone's Wi-Fi can and normally should remain enabled: it carries the local encrypted connection between the client and phone. With **Cellular-only egress (fail closed)** enabled, only the gateway's upstream Internet sockets are bound to Android's cellular `Network`. Losing cellular service stops forwarding instead of silently falling back to Wi-Fi.
+
+Legacy proxy traffic follows a separate local HTTP/SOCKS5 listener. HTTPS uses CONNECT passthrough; JustProxy does not install a certificate, decrypt TLS, or inspect payload contents.
 
 ## Features
 
-- One authenticated TCP port auto-detects HTTP proxy and SOCKS5 clients.
-- HTTPS tunneling with CONNECT and plain HTTP absolute-form forwarding.
-- SOCKS5 username/password authentication with remote DNS.
-- Cellular-only fail-closed routing: DNS and destination sockets use the same Android cellular Network.
-- Loopback-only USB mode by default.
-- Opt-in hotspot/LAN listener with a local/private client-address guard.
-- Random credentials protected by Android Keystore; regenerate them at any time.
-- Manual or scheduled session reconnect.
+- Standard WireGuard `.conf` export for official Windows, macOS, Linux, Android, and iOS clients.
+- Full-tunnel `0.0.0.0/0` and `::/0` routes with IPv4/IPv6 TCP and UDP forwarding.
+- One authenticated WireGuard peer in the v0.2 beta.
+- Userspace gateway on an unrooted phone; it does not use Android `VpnService`.
+- Cellular-only fail-closed routing for WireGuard, DNS, and legacy proxy destinations.
+- WireGuard active/total flow counts, byte estimates, and latest handshake status.
 - Current public IP and verified IP-change history.
-- Live run, today, and lifetime upload/download totals.
-- Recent per-session metadata: time, client, protocol, host/port, bytes, and result.
-- Maximum connections, idle timeout, data cap, and safe destination policy.
+- Live run, today, and lifetime upload/download totals plus a combined run data cap.
+- Android-Keystore-encrypted WireGuard and proxy credentials.
+- Manual reconnect of proxy sessions and WireGuard flows.
+- Optional authenticated HTTP/HTTPS CONNECT and SOCKS5 proxy.
+- Loopback-only USB proxy mode and opt-in hotspot/LAN proxy listener.
 - Authenticated local JSON control API.
 - Zero-runtime-dependency Python SDK/CLI.
-- Windows desktop companion packaged as a single executable.
 - Persistent Android notification with Reconnect and Stop actions.
 
 ## Downloads
@@ -59,45 +62,86 @@ HTTPS is passed through with HTTP CONNECT. JustProxy does not install a certific
 The repository distribution directory contains:
 
 - [Android APK](dist/android/JustProxy-android-debug.apk)
-- [Windows desktop app](dist/windows/JustProxyDesktop.exe)
 - [Python packages](dist/python/)
 - [SHA-256 checksums](dist/SHA256SUMS.txt)
 - [Artifact notes](dist/README.md)
 
-GitHub Releases carries the same files. Windows SmartScreen and Android may warn because the executable is unsigned and the APK uses an Android debug signing key. Verify the SHA-256 checksums before installing downloaded artifacts.
+GitHub Releases carries the same files. Android may warn because the APK uses a debug signing key. A beta APK produced by a different build runner may have a different debug-signing identity; if Android rejects an update, uninstall the old test build before installing the new one. Uninstalling clears JustProxy settings, analytics, credentials, and its stored peer, so export anything you need first. Verify the SHA-256 checksums before installing downloaded artifacts. Install an official WireGuard client separately from the [WireGuard installation page](https://www.wireguard.com/install/).
 
-## Quick start: phone hotspot
+## Quick start: WireGuard
 
-This is usually the easiest way to make PC proxy traffic leave through mobile data.
+The phone and client must be locally reachable over the same Wi-Fi LAN or the phone's hotspot. The phone may keep Wi-Fi and mobile data enabled at the same time.
 
 1. Install the JustProxy APK on an Android 8.0 or newer phone.
-2. Enable the phone hotspot and connect the PC to it.
-3. Open JustProxy and accept the safety notice.
-4. Turn on **Allow hotspot / LAN clients**.
-5. Keep **Cellular-only egress (fail closed)** enabled.
-6. Tap **Start proxy**.
-7. Copy the displayed phone address, port, username, and password.
-8. Configure the PC application for either HTTP or SOCKS5, or use the Windows companion.
+2. Install an [official WireGuard client](https://www.wireguard.com/install/) on the computer or mobile device that will use the phone.
+3. Enable mobile data on the phone and confirm it has Internet access.
+4. Either enable the phone hotspot and connect the client to it, or connect both devices to the same trusted Wi-Fi LAN.
+5. Open JustProxy and accept the safety notice.
+6. Leave the default WireGuard UDP port `51820` selected for the first setup.
+7. Tap **Create / export computer profile**, create the one peer, select the phone's current LAN/hotspot address, then export the `.conf` to a trusted location.
+8. Return to the main screen, enable **WireGuard gateway (full computer traffic)**, keep **Cellular-only egress (fail closed)** enabled, and tap **Start JustProxy**.
+9. Transfer the exported file securely to the client, import it into WireGuard, and activate the tunnel.
+
+The v0.2 beta accepts exactly one peer identity. Regenerating or revoking it immediately invalidates the old configuration after the gateway reloads. Do not run the same exported profile on multiple devices at the same time: they share one private key and inner address.
+
+### Import the profile
+
+- **Windows or macOS:** open the official WireGuard app, choose **Import tunnel(s) from file**, select the exported `.conf`, then activate it.
+- **Android or iOS:** in the official WireGuard app choose **Add** and import from a file/archive. JustProxy does not currently export a QR code.
+- **Linux:** install WireGuard tools and bring the profile up with `sudo wg-quick up /path/to/JustProxy-PC.conf`.
+
+The profile routes `0.0.0.0/0` and `::/0`, assigns `10.66.0.2` and `fd66::2`, uses an MTU of 1280, and sends DNS to literal public resolvers through the tunnel.
+
+> Security warning: the exported `.conf` contains the client private key. Anyone who obtains it can impersonate the accepted peer. Do not paste it into issues, logs, chat, or screenshots. Store and transfer it securely, and use **Revoke peer** if it may have leaked.
+
+### LAN, hotspot, endpoint, and firewall requirements
+
+The exported profile records the selected phone address and UDP port as a static WireGuard `Endpoint`. The client must be able to send UDP directly to that address.
+
+- A phone hotspot normally provides the simplest direct local path.
+- On Wi-Fi, both devices must be on the same reachable LAN; a guest network, client/AP isolation, VLAN rules, or a local firewall may block device-to-device UDP.
+- If the phone's LAN address or WireGuard port changes, re-export the profile or edit its `Endpoint` in the WireGuard client.
+- JustProxy v0.2 does not provide NAT traversal, dynamic endpoint discovery, or a public relay.
+- Carrier CGNAT and mobile firewalls normally prevent an Internet client from initiating a connection to the phone. Direct remote use is not supported.
+- Do not expose the gateway or control port through public router port forwarding.
+
+The WireGuard listener remains on the phone's LAN/hotspot interface. Upstream TCP/UDP sockets are independently bound to cellular in fail-closed mode. Turning off phone Wi-Fi may therefore break the client-to-phone path even when mobile data remains available.
+
+### Verify the tunnel
+
+With the WireGuard tunnel active:
+
+~~~bash
+curl -4 https://api.ipify.org
+curl -6 https://api64.ipify.org
+~~~
+
+The IPv4 result should match the public IP shown in JustProxy. IPv6 requires usable IPv6 service from the selected Android network; it fails closed rather than escaping outside the WireGuard route when unavailable. Normal DNS and UDP applications should work through the tunnel. General ICMP forwarding is not implemented, so `ping` is not a valid health check for this beta.
+
+## Legacy HTTP/SOCKS5 proxy
+
+The authenticated proxy remains supported for applications that already understand HTTP or SOCKS5. It is optional when WireGuard is enabled.
+
+### Hotspot or trusted LAN
+
+1. Enable the phone hotspot and connect the computer, or put both devices on the same trusted LAN.
+2. Turn on **Enable legacy HTTP / SOCKS5 proxy** and **Legacy proxy/control: allow LAN clients**.
+3. Keep **Cellular-only egress (fail closed)** enabled.
+4. Tap **Start JustProxy**.
+5. Use the displayed phone address, proxy port, username, and password in the proxy-aware application.
 
 The default proxy port is 8282. The authenticated control API uses the next port, 8283. The proxy password is also the control API Bearer token.
 
-## Quick start: USB
+### USB/ADB for the legacy proxy and control API
 
-USB mode keeps both listeners on Android loopback and is the safest default. It requires Android developer options and USB debugging.
-
-With the phone connected:
+ADB forwarding is TCP-only in this setup and does not carry the WireGuard UDP tunnel. With USB debugging enabled:
 
 ~~~powershell
 adb forward tcp:8282 tcp:8282
 adb forward tcp:8283 tcp:8283
 ~~~
 
-Leave **Allow hotspot / LAN clients** disabled. Start JustProxy, then use:
-
-- Proxy host: 127.0.0.1
-- Proxy port: 8282
-- Control API: http://127.0.0.1:8283
-- Username/password: values shown by the Android app
+Leave **Legacy proxy/control: allow LAN clients** disabled, then use `127.0.0.1:8282` for the proxy and `http://127.0.0.1:8283` for the control API.
 
 Remove the forwarding rules when finished:
 
@@ -106,61 +150,21 @@ adb forward --remove tcp:8282
 adb forward --remove tcp:8283
 ~~~
 
-## Test the proxy
-
-Replace USERNAME and PASSWORD with the generated values.
-
-HTTP/HTTPS CONNECT:
+Test HTTP CONNECT or SOCKS5 with:
 
 ~~~bash
 curl --proxy "http://USERNAME:PASSWORD@127.0.0.1:8282" https://api.ipify.org
-~~~
-
-SOCKS5 with DNS resolved through the phone:
-
-~~~bash
 curl --proxy "socks5h://USERNAME:PASSWORD@127.0.0.1:8282" https://api.ipify.org
 ~~~
 
-The result should match the public IP shown in JustProxy. With cellular-only enabled, requests fail when Android cannot provide a cellular Network; JustProxy does not silently fall back to Wi-Fi.
-
-## Windows desktop companion
-
-Run [JustProxyDesktop.exe](dist/windows/JustProxyDesktop.exe), then enter:
-
-- Phone host: 127.0.0.1 for USB, or the phone address shown in LAN mode
-- Control port: proxy port plus one
-- Token: the Android proxy password
-- Proxy username and proxy port: values shown by Android
-
-The desktop app can:
-
-- show service state, phone messages, current public IP, active connections, and traffic totals;
-- request a public-IP check, then poll for the asynchronous observation;
-- reconnect active proxy sessions, then poll for the resulting IP observation;
-- paste and validate the setup block copied by the Android app;
-- copy HTTP or SOCKS5 setup URLs.
-
-The phone accepts Check IP and Reconnect requests before the public-IP check finishes. The desktop polls status, metrics, and IP history once per second for up to about 12 seconds. If no fresh observation arrives in that window, use **Refresh** to check again; this is not evidence that the carrier changed the address.
-
-The executable does not contain phone credentials. It remembers only the phone host, control port,
-proxy username, and proxy port in `%APPDATA%\JustProxy\desktop.json`. The token/proxy password is
-never written to that file and is held by JustProxy Desktop only in process memory. Clipboard setup
-text also contains the token, so treat it as sensitive and clear the clipboard after use.
-
-Build it from source with:
-
-~~~powershell
-cd desktop
-.\build.ps1 -InstallPyInstaller
-~~~
+The result should match the public IP shown in JustProxy. With cellular-only enabled, requests fail when Android cannot provide a cellular `Network`; JustProxy does not silently fall back to Wi-Fi.
 
 ## Python API and CLI
 
 Install the bundled wheel:
 
 ~~~powershell
-py -m pip install dist\python\justproxy_client-0.1.0-py3-none-any.whl
+py -m pip install dist\python\justproxy_client-0.2.0b1-py3-none-any.whl
 ~~~
 
 CLI examples:
@@ -200,37 +204,37 @@ print(client.requests_proxies(
 ))
 ~~~
 
-Proxy URL and environment helpers require authentication. Configure `proxy_username` on the client (as above) or pass a username to each helper; when a username is configured, `proxy_password` defaults to the control token if it is omitted. The package uses only the Python standard library at runtime. See [python/README.md](python/README.md) for the full SDK and CLI reference.
+Proxy URL and environment helpers require authentication. Configure `proxy_username` on the client (as above) or pass a username to each helper; when a username is configured, `proxy_password` defaults to the control token if it is omitted. These helpers remain supported for the legacy proxy.
 
-## Rotation semantics
+Newer API responses expose a typed `status.wireguard` object and WireGuard upload, download, active-flow, and total-flow metrics. Older phones that omit those fields remain compatible; the SDK preserves unknown fields in each model's `raw` mapping. The package uses only the Python standard library at runtime. See [python/README.md](python/README.md) for the full SDK and CLI reference.
 
-The setting named **Reconnect sessions every N minutes** closes active proxy TCP sessions on schedule. New connections then use the currently selected Android network.
+## Reconnect and carrier IP changes
 
-This does not guarantee a different carrier IP.
+**Reconnect** closes active legacy proxy sessions, restarts WireGuard forwarding flows, and performs a fresh public-IP check. Scheduled reconnect uses the same principle. It does not toggle the cellular radio and does not guarantee a different carrier IP.
 
-A normal third-party Android app cannot toggle airplane mode or mobile data programmatically. JustProxy therefore:
+A normal unrooted third-party Android app cannot toggle airplane mode or mobile data programmatically. To request a new carrier lease:
 
-1. closes current sessions;
-2. performs a fresh public-IP check;
-3. records and reports **changed**, **unchanged**, or **check failed**.
+1. Leave the phone's Wi-Fi/hotspot path available to the client when possible.
+2. Manually turn **mobile data** off.
+3. Wait briefly, then turn mobile data on and wait for cellular service to return.
+4. Allow the WireGuard client to re-handshake, then tap **Check IP** in JustProxy.
+5. Trust the reported observation: **changed**, **unchanged**, or **check failed**.
 
-If a different carrier IP is required, manually toggle mobile data/airplane mode, wait for cellular service to return, then tap **Check IP**. Root/device-owner automation may be added later as a clearly separate, opt-in build.
+The carrier may return the same public IP after any number of toggles. Airplane mode can also disable the Wi-Fi/hotspot link that carries the local WireGuard tunnel, so a mobile-data-only toggle is usually less disruptive.
 
 ## Traffic analyzer and privacy
 
 JustProxy stores analytics only in its private Android SQLite database:
 
-- session start/end time;
-- client address;
-- HTTP or SOCKS5 protocol;
-- destination host and port;
-- uploaded/downloaded byte counts;
-- short completion result;
+- combined WireGuard and legacy-proxy uploaded/downloaded totals;
+- completed legacy proxy session time, client, protocol, destination host/port, bytes, and result;
 - public-IP observations and whether the value changed.
 
-It does not store traffic payloads, HTTP headers, proxy credentials, URL paths/query strings, DNS response contents, or TLS secrets. Android backup is disabled. Use **Clear history** on the history screen to erase stored analytics.
+Live WireGuard status also reports active/total userspace flows, byte estimates, and the latest handshake time. It does not persist packet payloads or WireGuard private keys in analytics.
 
-Traffic totals and the data cap count bytes relayed through the proxy's payload streams. They do not include TCP/IP or radio overhead and may not match carrier billing, so the phone or carrier data meter remains authoritative.
+JustProxy does not store traffic payloads, HTTP headers, proxy credentials, URL paths/query strings, DNS response contents, or TLS secrets. Android backup is disabled. Use **Clear history** on the history screen to erase stored analytics.
+
+WireGuard counts are packet-byte estimates and proxy counts are relayed payload bytes. Neither includes every IP, WireGuard, TCP, UDP, or radio overhead byte, so totals and the data cap may differ from carrier billing. The phone or carrier data meter remains authoritative.
 
 The public-IP check contacts https://api.ipify.org over the selected Android network. No JustProxy telemetry or crash-reporting SDK is included.
 
@@ -238,16 +242,19 @@ The public-IP check contacts https://api.ipify.org over the selected Android net
 
 | Control | Behavior |
 | --- | --- |
-| Allow hotspot / LAN clients | Binds listeners on IPv4 wildcard but rejects non-local/public client addresses |
+| Enable WireGuard gateway | Starts the encrypted full-device gateway when the one peer exists |
+| Enable legacy HTTP / SOCKS5 proxy | Keeps proxy-aware application support available independently of WireGuard |
+| Legacy proxy/control: allow LAN clients | Exposes the legacy proxy/control listeners to trusted local clients; WireGuard always needs a selected local endpoint |
 | Cellular-only egress | Requests Android cellular transport and fails closed if unavailable |
-| Allow private/LAN destinations | Advanced override for destination blocking; off by default |
+| Allow private/LAN destinations | Advanced legacy-proxy destination override; off by default |
+| WireGuard UDP port | Local encrypted listener; default 51820 and must differ from proxy/control ports |
 | Proxy port | Proxy listener; control API uses the next port |
-| Reconnect interval | 0 disables; 1 to 1440 minutes schedules session reconnect |
-| Idle timeout | Closes sessions with no activity |
-| Maximum connections | Bounds concurrent proxy sessions |
-| Data cap | Stops the current proxy run after the configured proxy-stream MiB total; the run survives network flaps and resets on stop/start or process recreation |
+| Reconnect interval | 0 disables; 1 to 1440 minutes schedules proxy/WireGuard flow reconnect |
+| Idle timeout | Closes legacy proxy sessions with no activity |
+| Maximum connections | Bounds concurrent legacy proxy sessions |
+| Data cap | Stops the run after the combined gateway/proxy MiB estimate; the run survives network flaps and resets on stop/start or process recreation |
 
-Private/loopback/link-local/multicast destinations and TCP port 25 are blocked by default to reduce SSRF, LAN scanning, and spam abuse. The advanced private-destination switch deliberately relaxes part of that policy.
+The WireGuard beta rejects private, loopback, link-local, multicast, documentation/test, and other non-public destinations, plus TCP/UDP port 25. The legacy proxy blocks unsafe local destinations and TCP port 25 by default; its advanced private-destination switch deliberately relaxes part of that policy.
 
 ## Control API
 
@@ -259,14 +266,16 @@ Authorization: Bearer PHONE_PASSWORD
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | /v1/status | Service, listener, egress, public IP, rotation status |
-| GET | /v1/metrics | Run/today/lifetime byte and connection totals |
+| GET | /v1/status | Service, proxy, public IP, rotation, and nested WireGuard gateway status |
+| GET | /v1/metrics | Run/today/lifetime totals plus WireGuard bytes and flow counts |
 | GET | /v1/ip-history | Recent public-IP observations |
 | GET | /v1/sessions | Recent sanitized session metadata |
 | POST | /v1/rotate | Close/reconnect sessions and schedule an IP check |
 | POST | /v1/check-ip | Schedule a public-IP check |
 
 Do not expose the control port through Internet port forwarding. Authentication is not a substitute for TLS on an untrusted network.
+
+The API never returns a WireGuard private key or an exportable client profile. Create, export, regenerate, and revoke the one peer only through the local Android UI.
 
 ## Build from source
 
@@ -275,9 +284,15 @@ Requirements:
 - Android Studio or Android SDK 35
 - JDK 17 or newer
 - Python 3.9 or newer
-- Windows with PyInstaller 6 for the desktop executable
+- Rust 1.85.1, Android NDK 28.2.13676358, and cargo-ndk 4.1.2 for the native gateway
 
-Android:
+Build and test the native gateway first. See [native/wireguard-gateway/README.md](native/wireguard-gateway/README.md) for ABI build commands and third-party notices.
+
+~~~bash
+cargo test --manifest-path native/wireguard-gateway/Cargo.toml
+~~~
+
+Android on Windows:
 
 ~~~powershell
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
@@ -298,16 +313,13 @@ py -m unittest discover -s python\tests -v
 py -m build --outdir dist\python python
 ~~~
 
-Desktop helpers:
-
-~~~powershell
-py -m unittest discover -s desktop\tests -v
-~~~
-
 ## Tests
 
 The project includes integration tests for:
 
+- WireGuard key/profile validation, deterministic full-tunnel configuration rendering, encrypted peer-record codecs, and endpoint safety;
+- gateway status, combined run/data-cap accounting, and additive control API fields;
+- native WireGuard packet, policy, TCP/UDP, flow-limit, and fail-closed network-binding behavior;
 - HTTP CONNECT authentication, tunneling, and TCP half-close behavior;
 - plain HTTP rewriting and proxy-credential stripping;
 - SOCKS5 authentication and tunneling;
@@ -316,21 +328,23 @@ The project includes integration tests for:
 - local-only ingress address policy;
 - authenticated control API routes;
 - analytics sanitization, IP validation, live byte checkpoints, and local-day rollups;
-- Python SDK, CLI, error handling, and proxy URL helpers;
-- Windows desktop validation, non-secret settings persistence, setup parsing, traffic formatting,
-  asynchronous IP-result polling, and honest rotation messaging.
+- Python SDK, CLI, WireGuard model compatibility, error handling, and proxy URL helpers.
 
-CI runs the Android/JVM, Python, and Windows suites, builds every platform artifact, clean-installs the wheel, and runs the frozen Windows executable's self-test. A real-device smoke test is still recommended across Pixel/AOSP and Samsung phones because hotspot and background-service behavior varies by manufacturer.
+CI runs the Rust tests/lints, Android/JVM tests and lint, Python suite, native Android cross-build, APK packaging checks, and a clean wheel installation. A real-phone/client smoke test remains required for WireGuard handshakes, TCP/UDP, IPv4/IPv6, hotspot reachability, cellular loss/recovery, and manufacturer-specific background behavior.
 
 ## Important limitations
 
-- Only proxy-aware PC applications use JustProxy. A future desktop TUN/VPN companion is required for all PC traffic and UDP.
-- SOCKS5 supports TCP CONNECT only; BIND and UDP ASSOCIATE are rejected.
-- Direct access is local/USB only. Carrier CGNAT normally prevents Internet clients from reaching the phone. Remote use requires a future phone-initiated encrypted relay.
-- Proxy credentials are not encrypted on the local hop. Prefer USB or a trusted personal hotspot.
-- Scheduled reconnect is not automatic carrier-IP rotation.
-- The current APK is an alpha/debug build, not a Play Store production release.
-- The bundled Windows executable is unsigned and may trigger SmartScreen; it is an alpha test build, not a production installer.
+- WireGuard v0.2 supports one peer identity and one fixed pair of inner addresses. It is not a multi-user VPN server.
+- The WireGuard data plane supports inner IPv4/IPv6 TCP and UDP but not general ICMP; `ping` may fail even when web and UDP traffic work.
+- The profile endpoint is a local LAN/hotspot address. There is no NAT traversal, relay, roaming endpoint service, or direct remote-access mode.
+- Guest-Wi-Fi isolation, host firewalls, router rules, or a changed phone LAN address can prevent the WireGuard handshake.
+- Usable tunneled IPv6 depends on IPv6 service from the selected Android network.
+- The exported `.conf` contains a private key. Revoke/regenerate the peer if the file is exposed.
+- No custom desktop application is shipped; an official WireGuard client is required for the full-device tunnel.
+- The optional SOCKS5 proxy still supports TCP CONNECT only; BIND and UDP ASSOCIATE are rejected.
+- Legacy proxy credentials are not encrypted on the local hop. Prefer USB or a trusted personal LAN/hotspot.
+- Scheduled reconnect and manually toggling mobile data do not guarantee carrier-IP rotation.
+- The current APK is a beta/debug build, not a Play Store production release.
 - Public-IP checking depends on the external ipify endpoint.
 - Battery optimization and aggressive manufacturer task killers may stop long-running background networking despite the foreground service.
 - JustProxy requests a sticky service restart after an ordinary Android process kill, but Android and

@@ -28,6 +28,11 @@ import com.justproxy.app.proxy.ProxySessionSnapshot;
 import com.justproxy.app.proxy.ProxyStatsSnapshot;
 import com.justproxy.app.proxy.RotationReason;
 import com.justproxy.app.proxy.SessionCloseReason;
+import com.justproxy.app.wireguard.WireGuardGatewayStats;
+import com.justproxy.app.wireguard.WireGuardGatewayStatus;
+import com.justproxy.app.wireguard.WireGuardNativeGateway;
+import com.justproxy.app.wireguard.WireGuardPeerRecord;
+import com.justproxy.app.wireguard.WireGuardPeerStore;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -52,16 +57,20 @@ public final class ProxyService extends Service {
     public static final String ACTION_RESTART = "com.justproxy.app.RESTART";
     public static final String ACTION_ROTATE = "com.justproxy.app.ROTATE";
     public static final String ACTION_REFRESH_IP = "com.justproxy.app.REFRESH_IP";
+    public static final String ACTION_RELOAD_WIREGUARD_PEER =
+            "com.justproxy.app.RELOAD_WIREGUARD_PEER";
 
     private static final String CHANNEL_ID = "proxy_service";
     private static final int NOTIFICATION_ID = 1001;
     private static final long ANALYTICS_REFRESH_INTERVAL_MILLIS = 5_000L;
+    private static final int MAX_AUTOMATIC_WIREGUARD_RESTARTS = 3;
     private static final AtomicReference<ProxyStatus> STATUS =
             new AtomicReference<>(ProxyStatus.stopped());
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final IpCheckGate ipCheckGate = new IpCheckGate();
     private final RunTotals runTotals = new RunTotals();
+    private final RunTotals wireGuardRunTotals = new RunTotals();
     private final TrafficCheckpoint trafficCheckpoint = new TrafficCheckpoint();
     private final TimedCache<AnalyticsSummary> analyticsSummaryCache =
             new TimedCache<>(ANALYTICS_REFRESH_INTERVAL_MILLIS);
@@ -73,16 +82,32 @@ public final class ProxyService extends Service {
     private NotificationManager notificationManager;
     private PowerManager.WakeLock wakeLock;
     private ProxyServer proxyServer;
+    private WireGuardNativeGateway wireGuardGateway;
+    private WireGuardPeerStore wireGuardPeerStore;
     private ControlApiServer controlApiServer;
     private volatile Network selectedNetwork;
     private volatile boolean desiredRunning;
     private volatile String serviceMessage = "Proxy is off";
+    private volatile String wireGuardMessage = "WireGuard gateway is disabled";
+    private volatile boolean wireGuardProfileConfigured;
+    private long lastWireGuardHandshakeMillis;
+    private WireGuardGatewayStats lastWireGuardSnapshot = WireGuardGatewayStats.stopped();
+    private int automaticWireGuardRestarts;
+    private long nextWireGuardRestartAtMillis;
+    private boolean wireGuardRecoveryPending;
     private long startedAtMillis;
     private long nextRotationAtMillis;
     private long ipCheckGeneration;
     private long cellularRequestGeneration;
     private long lastTrafficCheckpointAtMillis;
     private int notificationTick;
+
+    enum WireGuardRetryDecision {
+        NONE,
+        WAIT,
+        ATTEMPT,
+        EXHAUSTED
+    }
 
     public static ProxyStatus getStatus() {
         return STATUS.get();
@@ -92,6 +117,7 @@ public final class ProxyService extends Service {
     public void onCreate() {
         super.onCreate();
         settings = new AppSettings(this);
+        wireGuardPeerStore = new WireGuardPeerStore(this);
         analyticsStore = new AnalyticsStore(this);
         publicIpChecker = new PublicIpChecker();
         cellularNetworkManager = new CellularNetworkManager(this);
@@ -106,7 +132,7 @@ public final class ProxyService extends Service {
             return thread;
         });
         createNotificationChannel();
-        worker.scheduleAtFixedRate(this::tick, 0, 1, TimeUnit.SECONDS);
+        worker.scheduleAtFixedRate(this::safeTick, 0, 1, TimeUnit.SECONDS);
     }
 
     @Override
@@ -118,6 +144,8 @@ public final class ProxyService extends Service {
             worker.execute(() -> rotateSessions(RotationReason.MANUAL));
         } else if (ACTION_REFRESH_IP.equals(action)) {
             worker.execute(this::checkPublicIp);
+        } else if (ACTION_RELOAD_WIREGUARD_PEER.equals(action)) {
+            worker.execute(this::reloadWireGuardPeer);
         } else if (ACTION_RESTART.equals(action)) {
             startInForeground("Applying new credentials");
             worker.execute(() -> {
@@ -134,7 +162,8 @@ public final class ProxyService extends Service {
 
     static int restartModeForAction(String action, boolean running) {
         if (ACTION_STOP.equals(action)) return START_NOT_STICKY;
-        if (ACTION_ROTATE.equals(action) || ACTION_REFRESH_IP.equals(action)) {
+        if (ACTION_ROTATE.equals(action) || ACTION_REFRESH_IP.equals(action)
+                || ACTION_RELOAD_WIREGUARD_PEER.equals(action)) {
             return running ? START_STICKY : START_NOT_STICKY;
         }
         return START_STICKY;
@@ -152,20 +181,24 @@ public final class ProxyService extends Service {
         // leak into the replacement runtime.
         releaseCellularNetworkRequest();
         selectedNetwork = null;
-        stopProxyServer();
+        stopDataPlanes();
         closeControlApi();
         nextRotationAtMillis = 0;
 
         if (resetRunTotals) {
             runTotals.reset();
+            wireGuardRunTotals.reset();
             trafficCheckpoint.reset();
             lastTrafficCheckpointAtMillis = System.currentTimeMillis();
             startedAtMillis = System.currentTimeMillis();
+            automaticWireGuardRestarts = 0;
+            nextWireGuardRestartAtMillis = 0;
         } else if (startedAtMillis == 0) {
             startedAtMillis = System.currentTimeMillis();
         }
         desiredRunning = true;
         serviceMessage = "Starting";
+        refreshWireGuardProfilePresence("Waiting to start WireGuard");
         acquireWakeLock();
         try {
             startControlApi();
@@ -180,7 +213,7 @@ public final class ProxyService extends Service {
             serviceMessage = "Waiting for a cellular network";
             requestCellularNetwork();
         } else {
-            startProxyServer(null);
+            startDataPlanes(null);
         }
         updateStatus();
     }
@@ -190,11 +223,11 @@ public final class ProxyService extends Service {
                 && controlApiServer.isRunning()
                 && controlApiServer.getBoundPort() == settings.getPort() + 1;
         if (!controlHealthy) return false;
-        if (proxyServer != null && proxyServer.isRunning()) return true;
+        if (configuredDataPlanesHealthy()) return true;
         // No proxy listener is expected while cellular-only mode is genuinely waiting for a
         // network. A failed cellular listener retains selectedNetwork and is therefore retried.
         return settings.isCellularOnly() && selectedNetwork == null
-                && !serviceMessage.startsWith("Proxy failed")
+                && !serviceMessage.startsWith("Data plane failed")
                 && !serviceMessage.startsWith("Cellular request failed");
     }
 
@@ -207,18 +240,19 @@ public final class ProxyService extends Service {
                     execute(() -> {
                         if (!isCurrentCellularRequest(generation)) return;
                         if (!network.equals(cellularNetworkManager.getCellularNetwork())) return;
-                        if (network.equals(selectedNetwork) && proxyServer != null
-                                && proxyServer.isRunning()) return;
-                        startProxyServer(network);
+                        if (network.equals(selectedNetwork)
+                                && configuredDataPlanesHealthy()) return;
+                        startDataPlanes(network);
                     });
                 }
 
                 @Override public void onCellularLost() {
                     execute(() -> {
                         if (!isCurrentCellularRequest(generation)) return;
-                        stopProxyServer();
+                        stopDataPlanes();
                         selectedNetwork = null;
-                        serviceMessage = "Cellular network lost - proxy paused";
+                        serviceMessage = "Cellular network lost - JustProxy paused";
+                        setWireGuardWaitingMessage();
                         updateStatus();
                     });
                 }
@@ -226,9 +260,10 @@ public final class ProxyService extends Service {
                 @Override public void onCellularUnavailable() {
                     execute(() -> {
                         if (!isCurrentCellularRequest(generation)) return;
-                        stopProxyServer();
+                        stopDataPlanes();
                         selectedNetwork = null;
                         serviceMessage = "No cellular network - retrying";
+                        setWireGuardWaitingMessage();
                         updateStatus();
                         scheduleCellularRetry(generation);
                     });
@@ -236,10 +271,11 @@ public final class ProxyService extends Service {
             });
         } catch (RuntimeException exception) {
             if (!isCurrentCellularRequest(generation)) return;
-            stopProxyServer();
+            stopDataPlanes();
             selectedNetwork = null;
             serviceMessage = "Cellular request failed: " + safeMessage(exception)
                     + " - retrying";
+            setWireGuardWaitingMessage();
             updateStatus();
             scheduleCellularRetry(generation);
         }
@@ -260,40 +296,165 @@ public final class ProxyService extends Service {
         cellularNetworkManager.release();
     }
 
-    private void startProxyServer(Network network) {
-        stopProxyServer();
+    private void startDataPlanes(Network network) {
+        stopDataPlanes();
         selectedNetwork = network;
-        try {
-            AppSettings.Credentials credentials = settings.getCredentials();
-            InetAddress bind = InetAddress.getByName(
-                    settings.isLanAccessEnabled() ? "0.0.0.0" : "127.0.0.1");
-            ProxyServerConfig.Builder builder = ProxyServerConfig
-                    .builder(credentials.username, credentials.password)
-                    .bindAddress(bind)
-                    .port(settings.getPort())
-                    .handshakeTimeoutMillis(8_000)
-                    .idleTimeoutMillis(settings.getIdleTimeoutSeconds() * 1_000)
-                    .connectTimeoutMillis(12_000)
-                    .maxConnections(settings.getMaxConnections())
-                    .maxHttpHeaderBytes(32 * 1024)
-                    .allowPrivateDestinations(settings.isPrivateDestinationAccessEnabled());
-            if (network != null) {
-                builder.outboundConnector(new AndroidNetworkConnector(network));
+        automaticWireGuardRestarts = 0;
+        nextWireGuardRestartAtMillis = 0;
+        wireGuardRecoveryPending = false;
+        boolean started = false;
+        String failure = null;
+
+        if (settings.isLegacyProxyEnabled()) {
+            try {
+                startLegacyProxyServer(network);
+                started = true;
+            } catch (Exception exception) {
+                failure = "Legacy proxy: " + safeMessage(exception);
+                stopProxyServer();
             }
-            proxyServer = new ProxyServer(builder.build(), new AnalyticsListener());
-            proxyServer.start();
-            serviceMessage = network == null
-                    ? "Running on the system default network"
-                    : "Running with cellular-only egress";
-            int rotationMinutes = settings.getRotationMinutes();
-            nextRotationAtMillis = rotationMinutes == 0 ? 0
-                    : System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(rotationMinutes);
+        }
+
+        if (settings.isWireGuardEnabled()) {
+            try {
+                started |= startWireGuardGateway(network);
+            } catch (Exception exception) {
+                failure = appendFailure(failure,
+                        "WireGuard: " + safeMessage(exception));
+                stopWireGuardGateway();
+                wireGuardMessage = "WireGuard failed: " + safeMessage(exception);
+                wireGuardRecoveryPending = wireGuardProfileConfigured;
+            }
+        } else {
+            wireGuardProfileConfigured = false;
+            wireGuardMessage = "WireGuard gateway is disabled";
+        }
+
+        if (started) {
+            serviceMessage = dataPlaneRunningMessage(network);
+            if (failure != null) serviceMessage += "  |  " + failure;
+            resetRotationDeadline();
             checkPublicIp();
-        } catch (Exception exception) {
-            stopProxyServer();
-            serviceMessage = "Proxy failed: " + safeMessage(exception);
+        } else if (settings.isWireGuardEnabled() && !wireGuardProfileConfigured
+                && failure == null) {
+            serviceMessage = "Create and export a WireGuard computer profile";
+        } else {
+            serviceMessage = "Data plane failed"
+                    + (failure == null ? "" : ": " + failure);
         }
         updateStatus();
+    }
+
+    private void startLegacyProxyServer(Network network) throws IOException {
+        AppSettings.Credentials credentials = settings.getCredentials();
+        InetAddress bind = InetAddress.getByName(
+                settings.isLanAccessEnabled() ? "0.0.0.0" : "127.0.0.1");
+        ProxyServerConfig.Builder builder = ProxyServerConfig
+                .builder(credentials.username, credentials.password)
+                .bindAddress(bind)
+                .port(settings.getPort())
+                .handshakeTimeoutMillis(8_000)
+                .idleTimeoutMillis(settings.getIdleTimeoutSeconds() * 1_000)
+                .connectTimeoutMillis(12_000)
+                .maxConnections(settings.getMaxConnections())
+                .maxHttpHeaderBytes(32 * 1024)
+                .allowPrivateDestinations(settings.isPrivateDestinationAccessEnabled());
+        if (network != null) {
+            builder.outboundConnector(new AndroidNetworkConnector(network));
+        }
+        ProxyServer server = new ProxyServer(builder.build(), new AnalyticsListener());
+        server.start();
+        proxyServer = server;
+    }
+
+    private boolean startWireGuardGateway(Network network) {
+        java.util.Optional<WireGuardPeerRecord> stored = wireGuardPeerStore.load();
+        wireGuardProfileConfigured = stored.isPresent();
+        if (!stored.isPresent()) {
+            wireGuardMessage = "Create a computer profile to start WireGuard";
+            return false;
+        }
+        WireGuardPeerRecord peer = stored.get();
+        long networkHandle = network == null ? 0 : network.getNetworkHandle();
+        WireGuardNativeGateway.Config config = new WireGuardNativeGateway.Config(
+                peer.getServerPrivateKey(),
+                peer.getClientPublicKey(),
+                settings.getWireGuardPort(),
+                networkHandle,
+                settings.isCellularOnly());
+        wireGuardGateway = WireGuardNativeGateway.start(config);
+        lastWireGuardSnapshot = WireGuardGatewayStats.stopped();
+        wireGuardRecoveryPending = false;
+        wireGuardMessage = wireGuardListeningMessage();
+        return true;
+    }
+
+    private String wireGuardListeningMessage() {
+        return "Listening for the computer on UDP " + settings.getWireGuardPort();
+    }
+
+    private String dataPlaneRunningMessage(Network network) {
+        return network == null
+                ? "Running on the system default network"
+                : "Running with cellular-only egress";
+    }
+
+    private void resetRotationDeadline() {
+        int rotationMinutes = settings.getRotationMinutes();
+        nextRotationAtMillis = rotationMinutes == 0 ? 0
+                : System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(rotationMinutes);
+    }
+
+    private void refreshWireGuardProfilePresence(String configuredMessage) {
+        if (!settings.isWireGuardEnabled()) {
+            wireGuardProfileConfigured = false;
+            wireGuardMessage = "WireGuard gateway is disabled";
+            return;
+        }
+        try {
+            wireGuardProfileConfigured = wireGuardPeerStore.load().isPresent();
+            wireGuardMessage = wireGuardProfileConfigured
+                    ? configuredMessage : "Create a computer profile to start WireGuard";
+        } catch (RuntimeException exception) {
+            wireGuardProfileConfigured = false;
+            wireGuardMessage = "WireGuard failed: peer storage: "
+                    + safeMessage(exception);
+        }
+    }
+
+    private void setWireGuardWaitingMessage() {
+        if (!settings.isWireGuardEnabled()) {
+            wireGuardMessage = "WireGuard gateway is disabled";
+        } else if (wireGuardMessage.startsWith("WireGuard failed")) {
+            // Preserve the actionable storage/native error.
+        } else if (wireGuardProfileConfigured) {
+            wireGuardMessage = "Waiting for a cellular network";
+        } else {
+            wireGuardMessage = "Create a computer profile to start WireGuard";
+        }
+    }
+
+    private boolean configuredDataPlanesHealthy() {
+        if (settings.isLegacyProxyEnabled()
+                && (proxyServer == null || !proxyServer.isRunning())) {
+            return false;
+        }
+        if (settings.isWireGuardEnabled() && wireGuardProfileConfigured
+                && !currentWireGuardStats().isRunning()) {
+            return false;
+        }
+        return settings.isLegacyProxyEnabled()
+                || settings.isWireGuardEnabled() && !wireGuardProfileConfigured
+                || wireGuardGateway != null;
+    }
+
+    private boolean anyDataPlaneRunning() {
+        return proxyServer != null && proxyServer.isRunning()
+                || currentWireGuardStats().isRunning();
+    }
+
+    private static String appendFailure(String existing, String next) {
+        return existing == null ? next : existing + "; " + next;
     }
 
     private void startControlApi() throws IOException {
@@ -308,19 +469,113 @@ public final class ProxyService extends Service {
     }
 
     private void rotateSessions(RotationReason reason) {
-        if (proxyServer == null || !proxyServer.isRunning()) {
-            serviceMessage = "Cannot reconnect while the proxy is paused";
+        if (!anyDataPlaneRunning()) {
+            serviceMessage = "Cannot reconnect while JustProxy is paused";
             updateStatus();
             return;
         }
-        int closed = proxyServer.rotateSessions(reason);
-        serviceMessage = "Reconnected " + closed
-                + " session(s); checking whether the public IP changed";
-        int rotationMinutes = settings.getRotationMinutes();
-        nextRotationAtMillis = rotationMinutes == 0 ? 0
-                : System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(rotationMinutes);
-        worker.schedule(this::checkPublicIp, 2, TimeUnit.SECONDS);
+        int closed = proxyServer == null ? 0 : proxyServer.rotateSessions(reason);
+        WireGuardGatewayStats wireGuardStats = currentWireGuardStats();
+        int wireGuardFlows = wireGuardStats.getActiveFlows();
+        boolean wireGuardReconnectFailed = false;
+        if (wireGuardGateway != null) {
+            if (reason == RotationReason.MANUAL) {
+                automaticWireGuardRestarts = 0;
+                nextWireGuardRestartAtMillis = 0;
+            }
+            stopWireGuardGateway();
+            try {
+                wireGuardReconnectFailed = !startWireGuardGateway(selectedNetwork);
+            } catch (RuntimeException exception) {
+                wireGuardMessage = "WireGuard reconnect failed: " + safeMessage(exception);
+                wireGuardRecoveryPending = wireGuardProfileConfigured;
+                wireGuardReconnectFailed = true;
+            }
+        }
+        if (wireGuardReconnectFailed && !isLegacyProxyRunning()) {
+            serviceMessage = wireGuardProfileConfigured
+                    ? "Data plane failed: " + wireGuardMessage
+                    : "Create and export a WireGuard computer profile";
+            nextRotationAtMillis = 0;
+        } else {
+            serviceMessage = "Reconnected " + (closed + wireGuardFlows)
+                    + " connection(s); checking whether the public IP changed";
+            resetRotationDeadline();
+            worker.schedule(this::checkPublicIp, 2, TimeUnit.SECONDS);
+        }
         updateStatus();
+    }
+
+    private void reloadWireGuardPeer() {
+        automaticWireGuardRestarts = 0;
+        nextWireGuardRestartAtMillis = 0;
+        wireGuardRecoveryPending = false;
+        stopWireGuardGateway();
+        try {
+            wireGuardProfileConfigured = wireGuardPeerStore.load().isPresent();
+        } catch (RuntimeException exception) {
+            wireGuardProfileConfigured = false;
+            wireGuardMessage = "WireGuard failed: peer storage: "
+                    + safeMessage(exception);
+            if (desiredRunning && !isLegacyProxyRunning()) {
+                serviceMessage = "Data plane failed: WireGuard peer storage";
+                nextRotationAtMillis = 0;
+            }
+            updateStatus();
+            stopServiceIfIdle();
+            return;
+        }
+        if (!desiredRunning || !settings.isWireGuardEnabled()) {
+            wireGuardMessage = !settings.isWireGuardEnabled()
+                    ? "WireGuard gateway is disabled"
+                    : wireGuardProfileConfigured
+                    ? "WireGuard gateway is stopped" : "Create a computer profile";
+            updateStatus();
+            stopServiceIfIdle();
+            return;
+        }
+        if (settings.isCellularOnly() && selectedNetwork == null) {
+            wireGuardMessage = wireGuardProfileConfigured
+                    ? "Waiting for a cellular network" : "Create a computer profile";
+            if (!wireGuardProfileConfigured && !isLegacyProxyRunning()) {
+                serviceMessage = "Create and export a WireGuard computer profile";
+                nextRotationAtMillis = 0;
+            }
+            updateStatus();
+            return;
+        }
+        try {
+            boolean started = startWireGuardGateway(selectedNetwork);
+            if (started) {
+                serviceMessage = dataPlaneRunningMessage(selectedNetwork);
+                resetRotationDeadline();
+                checkPublicIp();
+            } else if (isLegacyProxyRunning()) {
+                serviceMessage = "Legacy proxy running; create a WireGuard computer profile";
+            } else {
+                serviceMessage = "Create and export a WireGuard computer profile";
+                nextRotationAtMillis = 0;
+            }
+        } catch (RuntimeException exception) {
+            wireGuardMessage = "WireGuard failed: " + safeMessage(exception);
+            wireGuardRecoveryPending = wireGuardProfileConfigured;
+            if (!isLegacyProxyRunning()) {
+                serviceMessage = "Data plane failed: WireGuard: " + safeMessage(exception);
+                nextRotationAtMillis = 0;
+            }
+        }
+        updateStatus();
+    }
+
+    private boolean isLegacyProxyRunning() {
+        return proxyServer != null && proxyServer.isRunning();
+    }
+
+    private void stopServiceIfIdle() {
+        if (desiredRunning) return;
+        mainHandler.post(() -> {
+            if (!desiredRunning) stopSelf();
+        });
     }
 
     private void checkPublicIp() {
@@ -385,13 +640,15 @@ public final class ProxyService extends Service {
         if (desiredRunning && now - lastTrafficCheckpointAtMillis >= 5_000L) {
             checkpointTraffic(false);
         }
-        if (desiredRunning && proxyServer != null && proxyServer.isRunning()) {
+        if (desiredRunning) maybeRecoverWireGuard(now);
+        if (desiredRunning && anyDataPlaneRunning()) {
             if (nextRotationAtMillis > 0 && now >= nextRotationAtMillis) {
                 rotateSessions(RotationReason.SCHEDULED);
             }
-            ProxyStatsSnapshot stats = proxyServer.getStatsSnapshot();
+            ProxyStatsSnapshot stats = currentProxyStats();
+            WireGuardGatewayStats wireGuardStats = currentWireGuardStats();
             long capMiB = settings.getDataCapMiB();
-            if (capMiB > 0 && runTotals.trafficBytesWith(stats)
+            if (capMiB > 0 && runTotals.trafficBytesWith(stats, wireGuardStats)
                     >= capMiB * 1024L * 1024L) {
                 stopRuntime(true, "Data cap reached");
                 return;
@@ -402,26 +659,179 @@ public final class ProxyService extends Service {
         if (++notificationTick % 5 == 0 && desiredRunning) updateNotification();
     }
 
+    private void safeTick() {
+        try {
+            tick();
+        } catch (RuntimeException | LinkageError error) {
+            serviceMessage = "Service monitor failed: " + safeMessage(error);
+            try {
+                updateStatus();
+            } catch (RuntimeException | LinkageError ignored) {
+                // Keep the fixed-rate task alive so a transient native or storage error
+                // cannot silently disable data-cap enforcement and network recovery.
+            }
+        }
+    }
+
     private void updateStatus() {
         AnalyticsSummary summary = getAnalyticsSummary();
-        ProxyStatsSnapshot stats = proxyServer == null ? null : proxyServer.getStatsSnapshot();
+        ProxyStatsSnapshot stats = currentProxyStats();
+        WireGuardGatewayStats wireGuardStats = currentWireGuardStats();
+        if (wireGuardStats.getLastHandshakeMillis() > 0) {
+            lastWireGuardHandshakeMillis = wireGuardStats.getLastHandshakeMillis();
+        }
+        boolean proxyRunning = stats != null && stats.isRunning();
+        boolean wireGuardRunning = wireGuardStats.isRunning();
         ProxyStatus.State state = !desiredRunning ? ProxyStatus.State.STOPPED
-                : stats != null && stats.isRunning() ? ProxyStatus.State.RUNNING
-                : serviceMessage.startsWith("Proxy failed")
+                : proxyRunning || wireGuardRunning ? ProxyStatus.State.RUNNING
+                : serviceMessage.startsWith("Data plane failed")
                 || serviceMessage.startsWith("Control API")
                 || serviceMessage.startsWith("Cellular request failed")
+                || serviceMessage.startsWith("Service monitor failed")
+                || isWireGuardErrorMessage(wireGuardMessage)
                 ? ProxyStatus.State.ERROR : ProxyStatus.State.PAUSED;
         String address = settings.isLanAccessEnabled() ? "0.0.0.0" : "127.0.0.1";
         String egress = settings.isCellularOnly() ? "Cellular only" : "System default";
+        WireGuardGatewayStatus wireGuardStatus = buildWireGuardStatus(wireGuardStats);
         STATUS.set(new ProxyStatus(state, serviceMessage, address, settings.getPort(), egress,
                 summary.getCurrentPublicIp(),
-                runTotals.uploadedBytesWith(stats),
-                runTotals.downloadedBytesWith(stats),
+                runTotals.uploadedBytesWith(stats, wireGuardStats),
+                runTotals.downloadedBytesWith(stats, wireGuardStats),
                 summary.getTodayUploadedBytes(), summary.getTodayDownloadedBytes(),
                 summary.getLifetimeUploadedBytes(), summary.getLifetimeDownloadedBytes(),
-                stats == null ? 0 : stats.getActiveConnections(),
+                saturatedIntAdd(stats == null ? 0 : stats.getActiveConnections(),
+                        wireGuardStats.getActiveFlows()),
                 summary.getLifetimeSessionCount(), summary.getPublicIpChangeCount(),
-                desiredRunning ? startedAtMillis : 0, nextRotationAtMillis));
+                desiredRunning ? startedAtMillis : 0, nextRotationAtMillis,
+                wireGuardStatus));
+    }
+
+    private ProxyStatsSnapshot currentProxyStats() {
+        return proxyServer == null ? null : proxyServer.getStatsSnapshot();
+    }
+
+    private WireGuardGatewayStats currentWireGuardStats() {
+        WireGuardNativeGateway gateway = wireGuardGateway;
+        if (gateway == null) return WireGuardGatewayStats.stopped();
+        try {
+            WireGuardGatewayStats current = gateway.getStats();
+            lastWireGuardSnapshot = current;
+            wireGuardRecoveryPending = current.hasFatalError() || !current.isRunning();
+            wireGuardMessage = wireGuardMessageAfterStats(
+                    wireGuardMessage, current, settings.getWireGuardPort());
+            if (wireGuardRecoveryPending && !isLegacyProxyRunning()) {
+                serviceMessage = "Data plane failed: " + wireGuardMessage;
+            }
+            return current;
+        } catch (RuntimeException exception) {
+            wireGuardMessage = "WireGuard status failed: " + safeMessage(exception);
+            wireGuardRecoveryPending = true;
+            if (!isLegacyProxyRunning()) {
+                serviceMessage = "Data plane failed: " + wireGuardMessage;
+            }
+            return stoppedWireGuardSnapshot(wireGuardMessage);
+        }
+    }
+
+    private WireGuardGatewayStats stoppedWireGuardSnapshot(String error) {
+        WireGuardGatewayStats previous = lastWireGuardSnapshot;
+        return new WireGuardGatewayStats(false,
+                previous.getUploadedBytes(), previous.getDownloadedBytes(), 0, 0,
+                previous.getTotalTcpFlows(), previous.getTotalUdpFlows(),
+                previous.getLastHandshakeMillis(), error);
+    }
+
+    private void maybeRecoverWireGuard(long now) {
+        WireGuardNativeGateway gateway = wireGuardGateway;
+        WireGuardGatewayStats current = gateway == null
+                ? WireGuardGatewayStats.stopped() : currentWireGuardStats();
+        boolean cellularReady = !settings.isCellularOnly() || selectedNetwork != null;
+        WireGuardRetryDecision decision = decideWireGuardRetry(
+                settings.isWireGuardEnabled(),
+                wireGuardProfileConfigured, cellularReady,
+                current.isRunning(), wireGuardRecoveryPending,
+                automaticWireGuardRestarts, MAX_AUTOMATIC_WIREGUARD_RESTARTS,
+                now, nextWireGuardRestartAtMillis);
+        if (decision == WireGuardRetryDecision.NONE
+                || decision == WireGuardRetryDecision.WAIT) return;
+        if (decision == WireGuardRetryDecision.EXHAUSTED) {
+            if (gateway != null) stopWireGuardGateway();
+            wireGuardRecoveryPending = false;
+            wireGuardMessage = "WireGuard failed repeatedly; stop and start JustProxy to retry";
+            if (!isLegacyProxyRunning()) {
+                serviceMessage = "Data plane failed: " + wireGuardMessage;
+            }
+            return;
+        }
+
+        if (gateway != null) stopWireGuardGateway();
+        automaticWireGuardRestarts++;
+        long delaySeconds = automaticWireGuardRestarts == 1 ? 5
+                : automaticWireGuardRestarts == 2 ? 15 : 60;
+        nextWireGuardRestartAtMillis = now + TimeUnit.SECONDS.toMillis(delaySeconds);
+        try {
+            startWireGuardGateway(selectedNetwork);
+            wireGuardMessage = "WireGuard automatically restarted ("
+                    + automaticWireGuardRestarts + "/"
+                    + MAX_AUTOMATIC_WIREGUARD_RESTARTS + ")";
+            serviceMessage = dataPlaneRunningMessage(selectedNetwork);
+        } catch (RuntimeException exception) {
+            wireGuardMessage = "WireGuard restart failed: " + safeMessage(exception);
+            wireGuardRecoveryPending = true;
+        }
+    }
+
+    static WireGuardRetryDecision decideWireGuardRetry(
+            boolean enabled, boolean profileConfigured, boolean cellularReady,
+            boolean running, boolean recoveryPending, int attempts, int maximum,
+            long nowMillis, long notBeforeMillis) {
+        if (!enabled || !profileConfigured || !cellularReady
+                || running || !recoveryPending) {
+            return WireGuardRetryDecision.NONE;
+        }
+        if (attempts >= maximum) return WireGuardRetryDecision.EXHAUSTED;
+        return nowMillis < notBeforeMillis
+                ? WireGuardRetryDecision.WAIT : WireGuardRetryDecision.ATTEMPT;
+    }
+
+    static String wireGuardMessageAfterStats(String previous,
+                                             WireGuardGatewayStats stats,
+                                             int port) {
+        if (stats.hasFatalError()) {
+            return "WireGuard failed: " + stats.getFatalError();
+        }
+        if (!stats.isRunning()) {
+            return "WireGuard failed: gateway stopped unexpectedly";
+        }
+        return previous == null || isWireGuardErrorMessage(previous)
+                ? "Listening for the computer on UDP " + port : previous;
+    }
+
+    private WireGuardGatewayStatus buildWireGuardStatus(
+            WireGuardGatewayStats current) {
+        if (!settings.isWireGuardEnabled()) {
+            return WireGuardGatewayStatus.disabled();
+        }
+        WireGuardGatewayStatus.State state;
+        if (current.isRunning()) {
+            state = WireGuardGatewayStatus.State.RUNNING;
+        } else if (isWireGuardErrorMessage(wireGuardMessage)) {
+            state = WireGuardGatewayStatus.State.ERROR;
+        } else if (!wireGuardProfileConfigured) {
+            state = WireGuardGatewayStatus.State.NO_PROFILE;
+        } else {
+            state = WireGuardGatewayStatus.State.WAITING;
+        }
+        return new WireGuardGatewayStatus(
+                state,
+                wireGuardMessage,
+                settings.getWireGuardPort(),
+                wireGuardProfileConfigured ? 1 : 0,
+                current.getActiveFlows(),
+                wireGuardRunTotals.totalConnectionsWith(null, current),
+                wireGuardRunTotals.uploadedBytesWith(null, current),
+                wireGuardRunTotals.downloadedBytesWith(null, current),
+                Math.max(lastWireGuardHandshakeMillis, current.getLastHandshakeMillis()));
     }
 
     private AnalyticsSummary getAnalyticsSummary() {
@@ -435,7 +845,8 @@ public final class ProxyService extends Service {
         nextRotationAtMillis = 0;
         releaseCellularNetworkRequest();
         selectedNetwork = null;
-        stopProxyServer();
+        stopDataPlanes();
+        refreshWireGuardProfilePresence("WireGuard gateway is stopped");
         closeControlApi();
         releaseWakeLock();
         serviceMessage = message;
@@ -466,14 +877,42 @@ public final class ProxyService extends Service {
         }
     }
 
+    private void stopDataPlanes() {
+        stopProxyServer();
+        stopWireGuardGateway();
+    }
+
+    private void stopWireGuardGateway() {
+        ipCheckGeneration++;
+        WireGuardNativeGateway gateway = wireGuardGateway;
+        wireGuardRecoveryPending = false;
+        if (gateway == null) return;
+        checkpointTraffic(true);
+        wireGuardGateway = null;
+        WireGuardGatewayStats finalStats = lastWireGuardSnapshot;
+        try {
+            finalStats = gateway.stopAndGetStats();
+        } catch (RuntimeException exception) {
+            wireGuardMessage = "WireGuard shutdown failed: "
+                    + safeMessage(exception);
+        }
+        runTotals.add(finalStats);
+        wireGuardRunTotals.add(finalStats);
+        if (finalStats.getLastHandshakeMillis() > 0) {
+            lastWireGuardHandshakeMillis = finalStats.getLastHandshakeMillis();
+        }
+        lastWireGuardSnapshot = WireGuardGatewayStats.stopped();
+        checkpointTraffic(true);
+    }
+
     private void checkpointTraffic(boolean force) {
         long now = System.currentTimeMillis();
         if (!force && now - lastTrafficCheckpointAtMillis < 5_000L) return;
-        ProxyStatsSnapshot current = proxyServer == null
-                ? null : proxyServer.getStatsSnapshot();
+        ProxyStatsSnapshot current = currentProxyStats();
+        WireGuardGatewayStats wireGuardStats = currentWireGuardStats();
         TrafficCheckpoint.Delta delta = trafficCheckpoint.pending(
-                runTotals.uploadedBytesWith(current),
-                runTotals.downloadedBytesWith(current));
+                runTotals.uploadedBytesWith(current, wireGuardStats),
+                runTotals.downloadedBytesWith(current, wireGuardStats));
         try {
             analyticsStore.recordTrafficDelta(
                     delta.uploadedBytes, delta.downloadedBytes, now);
@@ -503,24 +942,57 @@ public final class ProxyService extends Service {
         try { worker.execute(runnable); } catch (RejectedExecutionException ignored) {}
     }
 
-    private static String safeMessage(Exception exception) {
-        String message = exception.getMessage();
-        return message == null ? exception.getClass().getSimpleName() : message;
+    private static String safeMessage(Throwable throwable) {
+        String message = throwable.getMessage();
+        return message == null ? throwable.getClass().getSimpleName() : message;
+    }
+
+    static boolean isWireGuardErrorMessage(String message) {
+        return message != null && (message.startsWith("WireGuard failed")
+                || message.startsWith("WireGuard status failed")
+                || message.startsWith("WireGuard reconnect failed")
+                || message.startsWith("WireGuard restart failed")
+                || message.startsWith("WireGuard shutdown failed"));
+    }
+
+    private static int saturatedIntAdd(int left, int right) {
+        return Integer.MAX_VALUE - left < right ? Integer.MAX_VALUE : left + right;
     }
 
     @Override
     public void onDestroy() {
         desiredRunning = false;
+        try {
+            worker.execute(() -> {
+                try {
+                    destroyRuntimeOnWorker();
+                } finally {
+                    publicIpChecker.close();
+                    analyticsStore.close();
+                    worker.shutdownNow();
+                }
+            });
+            worker.shutdown();
+        } catch (RejectedExecutionException exception) {
+            destroyRuntimeOnWorker();
+            publicIpChecker.close();
+            analyticsStore.close();
+            worker.shutdownNow();
+        }
+        super.onDestroy();
+    }
+
+    private void destroyRuntimeOnWorker() {
+        ipCheckGate.cancelPending();
+        nextRotationAtMillis = 0;
         releaseCellularNetworkRequest();
-        stopProxyServer();
+        selectedNetwork = null;
+        stopDataPlanes();
+        refreshWireGuardProfilePresence("WireGuard gateway is stopped");
         closeControlApi();
         releaseWakeLock();
         if ("Starting".equals(serviceMessage)) serviceMessage = "Service stopped";
         updateStatus();
-        publicIpChecker.close();
-        analyticsStore.close();
-        worker.shutdownNow();
-        super.onDestroy();
     }
 
     @Override public IBinder onBind(Intent intent) {
@@ -618,6 +1090,18 @@ public final class ProxyService extends Service {
                 json.put("next_rotation_at_ms", status.nextRotationAtMillis == 0
                         ? JSONObject.NULL : status.nextRotationAtMillis);
                 json.put("rotation_guarantees_ip_change", false);
+                json.put("wireguard", new JSONObject()
+                        .put("state", status.wireGuard.state.name()
+                                .toLowerCase(Locale.ROOT))
+                        .put("message", status.wireGuard.message)
+                        .put("port", status.wireGuard.port)
+                        .put("configured_peers", status.wireGuard.configuredPeers)
+                        .put("active_flows", status.wireGuard.activeFlows)
+                        .put("total_flows", status.wireGuard.totalFlows)
+                        .put("uploaded_bytes", status.wireGuard.uploadedBytes)
+                        .put("downloaded_bytes", status.wireGuard.downloadedBytes)
+                        .put("last_handshake_ms", status.wireGuard.lastHandshakeMillis == 0
+                                ? JSONObject.NULL : status.wireGuard.lastHandshakeMillis));
                 return json.toString();
             } catch (JSONException exception) {
                 return jsonFailure();
@@ -636,6 +1120,14 @@ public final class ProxyService extends Service {
                         .put("lifetime_downloaded_bytes", status.lifetimeDownloadedBytes)
                         .put("lifetime_sessions", status.lifetimeSessions)
                         .put("ip_change_count", status.ipChangeCount)
+                        .put("wireguard_uploaded_bytes",
+                                status.wireGuard.uploadedBytes)
+                        .put("wireguard_downloaded_bytes",
+                                status.wireGuard.downloadedBytes)
+                        .put("wireguard_active_flows",
+                                status.wireGuard.activeFlows)
+                        .put("wireguard_total_flows",
+                                status.wireGuard.totalFlows)
                         .toString();
             } catch (JSONException exception) {
                 return jsonFailure();
@@ -741,6 +1233,11 @@ public final class ProxyService extends Service {
             add(stats.getBytesUploaded(), stats.getBytesDownloaded(), stats.getTotalConnections());
         }
 
+        synchronized void add(WireGuardGatewayStats stats) {
+            if (stats == null) return;
+            add(stats.getUploadedBytes(), stats.getDownloadedBytes(), stats.getTotalFlows());
+        }
+
         synchronized void add(long uploaded, long downloaded, long connections) {
             uploadedBytes = saturatedAdd(uploadedBytes, uploaded);
             downloadedBytes = saturatedAdd(downloadedBytes, downloaded);
@@ -752,14 +1249,32 @@ public final class ProxyService extends Service {
                     current == null ? 0 : current.getBytesUploaded());
         }
 
+        synchronized long uploadedBytesWith(
+                ProxyStatsSnapshot current, WireGuardGatewayStats wireGuard) {
+            return saturatedAdd(uploadedBytesWith(current),
+                    wireGuard == null ? 0 : wireGuard.getUploadedBytes());
+        }
+
         synchronized long downloadedBytesWith(ProxyStatsSnapshot current) {
             return saturatedAdd(downloadedBytes,
                     current == null ? 0 : current.getBytesDownloaded());
         }
 
+        synchronized long downloadedBytesWith(
+                ProxyStatsSnapshot current, WireGuardGatewayStats wireGuard) {
+            return saturatedAdd(downloadedBytesWith(current),
+                    wireGuard == null ? 0 : wireGuard.getDownloadedBytes());
+        }
+
         synchronized long totalConnectionsWith(ProxyStatsSnapshot current) {
             return saturatedAdd(totalConnections,
                     current == null ? 0 : current.getTotalConnections());
+        }
+
+        synchronized long totalConnectionsWith(
+                ProxyStatsSnapshot current, WireGuardGatewayStats wireGuard) {
+            return saturatedAdd(totalConnectionsWith(current),
+                    wireGuard == null ? 0 : wireGuard.getTotalFlows());
         }
 
         synchronized long trafficBytesWith(ProxyStatsSnapshot current) {
@@ -768,6 +1283,13 @@ public final class ProxyService extends Service {
             return saturatedAdd(
                     saturatedAdd(uploadedBytes, currentUploaded),
                     saturatedAdd(downloadedBytes, currentDownloaded));
+        }
+
+        synchronized long trafficBytesWith(
+                ProxyStatsSnapshot current, WireGuardGatewayStats wireGuard) {
+            long currentWireGuard = wireGuard == null ? 0 : saturatedAdd(
+                    wireGuard.getUploadedBytes(), wireGuard.getDownloadedBytes());
+            return saturatedAdd(trafficBytesWith(current), currentWireGuard);
         }
 
         private static long saturatedAdd(long left, long right) {
@@ -828,8 +1350,8 @@ public final class ProxyService extends Service {
         }
 
         synchronized void commit(Delta delta) {
-            uploadedBaseline = delta.totalUploaded;
-            downloadedBaseline = delta.totalDownloaded;
+            uploadedBaseline = Math.max(uploadedBaseline, delta.totalUploaded);
+            downloadedBaseline = Math.max(downloadedBaseline, delta.totalDownloaded);
         }
 
         synchronized void reset() {

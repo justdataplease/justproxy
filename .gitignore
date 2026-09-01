@@ -11,8 +11,6 @@ __pycache__/
 .pytest_cache/
 /.build-tools/
 /.gradle-build/
-/desktop/build/
-/desktop/dist/
 /python/build/
 /python/dist/
 /python/src/*.egg-info/

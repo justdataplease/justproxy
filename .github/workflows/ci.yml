@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   android:
-    name: Android and JVM
+    name: Android, Rust, and JVM
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -18,10 +18,40 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v6
+      - name: Install pinned Rust and Android native toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal --component clippy,rustfmt
+          rustup target add --toolchain 1.85.1 aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          cargo +1.85.1 install cargo-ndk --version 4.1.2 --locked
+          sdkmanager "ndk;28.2.13676358"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+      - name: Test and lint native gateway
+        working-directory: native/wireguard-gateway
+        run: |
+          cargo test --locked
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo fmt -- --check
       - name: Test, lint, and build APK
         run: |
           chmod +x gradlew
           ./gradlew testDebugUnitTest lintDebug assembleDebug --no-daemon
+      - name: Verify APK packaging
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          badging="$($build_tools/aapt dump badging "$apk")"
+          native_code="$(printf '%s\n' "$badging" | grep -F "native-code:")"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            grep -Fq "'$abi'" <<< "$native_code"
+          done
+          "$build_tools/zipalign" -c -P 16 -v 4 "$apk"
+          "$build_tools/apksigner" verify --verbose "$apk"
+          apk_entries="$(unzip -Z1 "$apk")"
+          if grep -Fq 'libboringtun-' <<< "$apk_entries"; then
+            echo "Unexpected standalone BoringTun library in APK" >&2
+            exit 1
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: JustProxy-android-debug
@@ -52,26 +82,3 @@ jobs:
           package-smoke/bin/python -m pip install --no-index package-dist/*.whl
           package-smoke/bin/python -c "from justproxy_client import JustProxyClient; assert JustProxyClient('token', proxy_username='user').socks_url(proxy_port=8282).startswith('socks5h://user:token@')"
           package-smoke/bin/justproxy --version
-
-  windows:
-    name: Windows companion
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Test desktop helpers
-        run: python -m unittest discover -s desktop/tests -v
-      - name: Compile Python sources
-        run: python -m compileall -q python/src desktop
-      - name: Build desktop executable
-        run: |
-          python -m pip install "pyinstaller>=6,<7"
-          cd desktop
-          python -m PyInstaller --noconfirm --clean JustProxyDesktop.spec
-      - name: Smoke-test desktop executable
-        shell: pwsh
-        run: |
-          $process = Start-Process -FilePath .\desktop\dist\JustProxyDesktop.exe -ArgumentList '--self-test' -WindowStyle Hidden -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Desktop self-test failed with exit code $($process.ExitCode)" }
