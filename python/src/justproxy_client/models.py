@@ -99,6 +99,8 @@ class IpRotationStatus(JsonModel):
     last_outcome: Optional[str] = None
     recovery_required: bool = False
     guarantees_ip_change: bool = False
+    mode: Optional[str] = None
+    airplane_mode_seconds: Optional[int] = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "IpRotationStatus":
@@ -109,6 +111,10 @@ class IpRotationStatus(JsonModel):
             state=_optional_str(value.get("state")),
             message=_optional_str(value.get("message")),
             interval_minutes=_optional_int(value.get("interval_minutes")),
+            mode=_optional_str(value.get("mode")),
+            airplane_mode_seconds=_optional_int(
+                value.get("airplane_mode_seconds")
+            ),
             data_off_seconds=_optional_int(value.get("data_off_seconds")),
             next_at_ms=_optional_int(value.get("next_at_ms")),
             last_attempt_at_ms=_optional_int(value.get("last_attempt_at_ms")),
@@ -304,6 +310,9 @@ class RotationResult(JsonModel):
     ip_changed: Optional[bool] = None
     manual_carrier_reset_required: bool = False
     message: Optional[str] = None
+    mode: Optional[str] = None
+    airplane_mode_seconds: Optional[int] = None
+    data_off_seconds: Optional[int] = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "RotationResult":
@@ -316,6 +325,11 @@ class RotationResult(JsonModel):
             manual_carrier_reset_required=_bool(
                 value.get("manual_carrier_reset_required"), False
             ),
+            mode=_optional_str(value.get("mode")),
+            airplane_mode_seconds=_optional_int(
+                value.get("airplane_mode_seconds")
+            ),
+            data_off_seconds=_optional_int(value.get("data_off_seconds")),
             message=_optional_str(value.get("message")),
         )
 

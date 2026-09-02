@@ -6,22 +6,22 @@ import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.function.IntSupplier;
 
-/** Serial command policy for probing, cycling, and restoring mobile data. */
+/** Serial command policy for probing, cycling, and restoring airplane mode. */
 final class MobileDataCommandEngine {
     static final int MIN_DOWN_TIME_MILLIS = 1_000;
     static final int MAX_DOWN_TIME_MILLIS = 10_000;
     static final long COMMAND_TIMEOUT_MILLIS = 8_000L;
+    static final long CELLULAR_LOSS_TIMEOUT_MILLIS = 15_000L;
 
-    private static final List<String> CMD_DATA_HELP =
-            List.of("/system/bin/cmd", "phone", "data", "help");
-    private static final List<String> SVC_DATA_HELP = List.of("/system/bin/svc", "data");
-    private static final List<String> CMD_DISABLE =
-            List.of("/system/bin/cmd", "phone", "data", "disable");
-    private static final List<String> CMD_ENABLE =
+    private static final List<String> AIRPLANE_QUERY =
+            List.of("/system/bin/cmd", "connectivity", "airplane-mode");
+    private static final List<String> AIRPLANE_ENABLE =
+            List.of("/system/bin/cmd", "connectivity", "airplane-mode", "enable");
+    private static final List<String> AIRPLANE_DISABLE =
+            List.of("/system/bin/cmd", "connectivity", "airplane-mode", "disable");
+    private static final List<String> LEGACY_CMD_DATA_ENABLE =
             List.of("/system/bin/cmd", "phone", "data", "enable");
-    private static final List<String> SVC_DISABLE =
-            List.of("/system/bin/svc", "data", "disable");
-    private static final List<String> SVC_ENABLE =
+    private static final List<String> LEGACY_SVC_DATA_ENABLE =
             List.of("/system/bin/svc", "data", "enable");
 
     interface Sleeper {
@@ -31,48 +31,43 @@ final class MobileDataCommandEngine {
     private final CommandExecutor executor;
     private final Sleeper sleeper;
     private final IntSupplier uidSupplier;
+    private final CellularNetworkLossMonitor.Factory lossMonitorFactory;
 
     MobileDataCommandEngine(CommandExecutor executor, Sleeper sleeper, IntSupplier uidSupplier) {
+        this(executor, sleeper, uidSupplier, CellularNetworkLossMonitor.unavailableFactory());
+    }
+
+    MobileDataCommandEngine(
+            CommandExecutor executor,
+            Sleeper sleeper,
+            IntSupplier uidSupplier,
+            CellularNetworkLossMonitor.Factory lossMonitorFactory) {
         this.executor = Objects.requireNonNull(executor, "executor");
         this.sleeper = Objects.requireNonNull(sleeper, "sleeper");
         this.uidSupplier = Objects.requireNonNull(uidSupplier, "uidSupplier");
+        this.lossMonitorFactory = Objects.requireNonNull(lossMonitorFactory, "lossMonitorFactory");
     }
 
     synchronized MobileDataCommandResult probe() {
         long startedNanos = System.nanoTime();
-        CommandExecution primary = safeExecute(CMD_DATA_HELP);
-        String primaryOutput = describe("cmd phone data help", primary);
-        if (isCmdPhoneSupported(primary)) {
-            return result(
-                    MobileDataCommandResult.OPERATION_PROBE,
-                    MobileDataCommandResult.STATUS_OK,
-                    false,
-                    false,
-                    false,
-                    primary.exitCode,
-                    CommandExecution.NO_EXIT_CODE,
-                    elapsedSince(startedNanos),
-                    "Mobile-data control is available through cmd phone",
-                    primaryOutput);
-        }
-
-        CommandExecution fallback = safeExecute(SVC_DATA_HELP);
-        boolean supported = isSvcDataSupported(fallback);
+        CommandExecution query = safeExecute(AIRPLANE_QUERY);
+        AirplaneState state = airplaneState(query);
+        boolean supported = state != AirplaneState.UNKNOWN;
         return result(
                 MobileDataCommandResult.OPERATION_PROBE,
                 supported
                         ? MobileDataCommandResult.STATUS_OK
-                        : statusForFailure(fallback, MobileDataCommandResult.STATUS_UNSUPPORTED),
-                true,
+                        : statusForFailure(query, MobileDataCommandResult.STATUS_UNSUPPORTED),
                 false,
                 false,
-                fallback.exitCode,
+                false,
+                query.exitCode,
                 CommandExecution.NO_EXIT_CODE,
                 elapsedSince(startedNanos),
                 supported
-                        ? "Mobile-data control is available through svc fallback"
-                        : "Neither cmd phone data nor svc data was detected",
-                joinOutput(primaryOutput, describe("svc data", fallback)));
+                        ? "Airplane-mode control is available"
+                        : "Android airplane-mode control is unavailable",
+                describe("cmd connectivity airplane-mode", query));
     }
 
     synchronized MobileDataCommandResult cycle(int downTimeMillis) {
@@ -88,67 +83,151 @@ final class MobileDataCommandEngine {
                     CommandExecution.NO_EXIT_CODE,
                     CommandExecution.NO_EXIT_CODE,
                     elapsedSince(startedNanos),
-                    "Mobile-data off time must be between 1 and 10 seconds",
+                    "Airplane-mode time must be between 1 and 10 seconds",
                     "");
         }
 
-        ActionExecution disable = null;
-        ActionExecution enable;
+        CommandExecution query = safeExecute(AIRPLANE_QUERY);
+        AirplaneState initialState = airplaneState(query);
+        String queryOutput = describe("cmd connectivity airplane-mode", query);
+        if (initialState == AirplaneState.UNKNOWN) {
+            return result(
+                    MobileDataCommandResult.OPERATION_CYCLE,
+                    statusForFailure(query, MobileDataCommandResult.STATUS_UNSUPPORTED),
+                    false,
+                    false,
+                    false,
+                    query.exitCode,
+                    CommandExecution.NO_EXIT_CODE,
+                    elapsedSince(startedNanos),
+                    "Could not verify that airplane mode is off; cycle was not started",
+                    queryOutput);
+        }
+        if (initialState == AirplaneState.ENABLED) {
+            return result(
+                    MobileDataCommandResult.OPERATION_CYCLE,
+                    MobileDataCommandResult.STATUS_INVALID_ARGUMENT,
+                    false,
+                    false,
+                    false,
+                    query.exitCode,
+                    CommandExecution.NO_EXIT_CODE,
+                    elapsedSince(startedNanos),
+                    "Airplane mode is already on; cycle was not started",
+                    queryOutput);
+        }
+
+        final CellularNetworkLossMonitor lossMonitor;
+        try {
+            lossMonitor = Objects.requireNonNull(
+                    lossMonitorFactory.open(), "loss monitor factory returned null");
+        } catch (RuntimeException exception) {
+            return result(
+                    MobileDataCommandResult.OPERATION_CYCLE,
+                    MobileDataCommandResult.STATUS_INTERNAL_ERROR,
+                    false,
+                    false,
+                    false,
+                    query.exitCode,
+                    CommandExecution.NO_EXIT_CODE,
+                    elapsedSince(startedNanos),
+                    "Could not watch the cellular network; cycle was not started",
+                    joinOutput(queryOutput, safeMessage(exception)));
+        }
+
+        CommandExecution enable = null;
+        CommandExecution disable;
         int status = MobileDataCommandResult.STATUS_OK;
-        String message = "Mobile data was cycled and restored";
+        String message = "Airplane mode was cycled and turned off";
         boolean restoreThreadInterrupt = false;
         try {
-            disable = executeAction(false);
-            if (!disable.isSuccess()) {
+            enable = safeExecute(AIRPLANE_ENABLE);
+            if (!enable.isSuccess()) {
                 status = statusForFailure(
-                        disable.effective, MobileDataCommandResult.STATUS_DISABLE_FAILED);
-                message = "Could not disable mobile data";
+                        enable, MobileDataCommandResult.STATUS_DISABLE_FAILED);
+                message = "Could not turn airplane mode on";
             } else {
                 try {
-                    sleeper.sleep(downTimeMillis);
+                    if (!lossMonitor.awaitLoss(CELLULAR_LOSS_TIMEOUT_MILLIS)) {
+                        status = MobileDataCommandResult.STATUS_TIMED_OUT;
+                        message = "Cellular did not disconnect after airplane mode was turned on";
+                    } else {
+                        sleeper.sleep(downTimeMillis);
+                    }
                 } catch (InterruptedException exception) {
                     restoreThreadInterrupt = true;
                     status = MobileDataCommandResult.STATUS_INTERRUPTED;
-                    message = "Mobile-data cycle was interrupted";
+                    message = "Airplane-mode cycle was interrupted";
                 } catch (RuntimeException exception) {
                     status = MobileDataCommandResult.STATUS_INTERNAL_ERROR;
-                    message = "Mobile-data delay failed: " + safeMessage(exception);
+                    message = "Cellular-loss wait failed: " + safeMessage(exception);
                 }
             }
         } finally {
-            // Clear an interrupt just long enough to make the safety-critical restore attempt.
+            // Once enable was attempted, always turn airplane mode off, even on failure/interrupt.
             restoreThreadInterrupt |= Thread.interrupted();
-            enable = executeAction(true);
+            disable = safeExecute(AIRPLANE_DISABLE);
+            try {
+                lossMonitor.close();
+            } catch (RuntimeException ignored) {
+                // Closing a read-only monitor must never prevent the radio restore command.
+            }
         }
 
-        if (!enable.isSuccess()) {
+        if (!disable.isSuccess()) {
             status = statusForFailure(
-                    enable.effective, MobileDataCommandResult.STATUS_ENABLE_FAILED);
-            message = "Mobile data could not be restored automatically";
+                    disable, MobileDataCommandResult.STATUS_ENABLE_FAILED);
+            message = "Airplane mode could not be turned off automatically";
         }
         if (restoreThreadInterrupt) Thread.currentThread().interrupt();
 
         return result(
                 MobileDataCommandResult.OPERATION_CYCLE,
                 status,
-                (disable != null && disable.fallbackUsed) || enable.fallbackUsed,
+                false,
                 true,
-                enable.isSuccess(),
-                disable == null
-                        ? CommandExecution.NO_EXIT_CODE
-                        : disable.effective.exitCode,
-                enable.effective.exitCode,
+                disable.isSuccess(),
+                enable == null ? CommandExecution.NO_EXIT_CODE : enable.exitCode,
+                disable.exitCode,
                 elapsedSince(startedNanos),
                 message,
                 joinOutput(
-                        disable == null ? "Disable command did not run" : disable.output,
-                        enable.output));
+                        queryOutput,
+                        joinOutput(
+                                enable == null
+                                        ? "Airplane-mode enable command did not run"
+                                        : describe("cmd connectivity airplane-mode enable", enable),
+                                describe("cmd connectivity airplane-mode disable", disable))));
     }
 
     synchronized MobileDataCommandResult restore() {
         long startedNanos = System.nanoTime();
         boolean restoreThreadInterrupt = Thread.interrupted();
-        ActionExecution enable = executeAction(true);
+        CommandExecution disable = safeExecute(AIRPLANE_DISABLE);
+        if (restoreThreadInterrupt) Thread.currentThread().interrupt();
+        return result(
+                MobileDataCommandResult.OPERATION_RESTORE,
+                disable.isSuccess()
+                        ? MobileDataCommandResult.STATUS_OK
+                        : statusForFailure(
+                                disable, MobileDataCommandResult.STATUS_ENABLE_FAILED),
+                false,
+                true,
+                disable.isSuccess(),
+                disable.exitCode,
+                disable.exitCode,
+                elapsedSince(startedNanos),
+                disable.isSuccess()
+                        ? "Airplane mode was turned off"
+                        : "Airplane mode could not be turned off automatically",
+                describe("cmd connectivity airplane-mode disable", disable));
+    }
+
+    /** Upgrade-only recovery for an interrupted beta.2 mobile-data cycle. */
+    synchronized MobileDataCommandResult restoreLegacyMobileData() {
+        long startedNanos = System.nanoTime();
+        boolean restoreThreadInterrupt = Thread.interrupted();
+        ActionExecution enable = executeLegacyMobileDataEnable();
         if (restoreThreadInterrupt) Thread.currentThread().interrupt();
         return result(
                 MobileDataCommandResult.OPERATION_RESTORE,
@@ -163,24 +242,22 @@ final class MobileDataCommandEngine {
                 enable.effective.exitCode,
                 elapsedSince(startedNanos),
                 enable.isSuccess()
-                        ? "Mobile data was enabled"
+                        ? "Legacy mobile-data recovery completed"
                         : "Mobile data could not be restored automatically",
                 enable.output);
     }
 
-    private ActionExecution executeAction(boolean enable) {
-        String action = enable ? "enable" : "disable";
-        CommandExecution primary = safeExecute(enable ? CMD_ENABLE : CMD_DISABLE);
-        String output = describe("cmd phone data " + action, primary);
+    private ActionExecution executeLegacyMobileDataEnable() {
+        CommandExecution primary = safeExecute(LEGACY_CMD_DATA_ENABLE);
+        String output = describe("cmd phone data enable (legacy recovery)", primary);
         if (primary.isSuccess() || primary.interrupted) {
             return new ActionExecution(primary, false, output);
         }
-
-        CommandExecution fallback = safeExecute(enable ? SVC_ENABLE : SVC_DISABLE);
+        CommandExecution fallback = safeExecute(LEGACY_SVC_DATA_ENABLE);
         return new ActionExecution(
                 fallback,
                 true,
-                joinOutput(output, describe("svc data " + action + " (fallback)", fallback)));
+                joinOutput(output, describe("svc data enable (legacy recovery)", fallback)));
     }
 
     private CommandExecution safeExecute(List<String> command) {
@@ -223,22 +300,12 @@ final class MobileDataCommandEngine {
                 output);
     }
 
-    private static boolean isCmdPhoneSupported(CommandExecution execution) {
-        if (!isCompletedProbe(execution)) return false;
-        String output = execution.output.toLowerCase(Locale.ROOT);
-        return output.contains("data enable") && output.contains("data disable");
-    }
-
-    private static boolean isSvcDataSupported(CommandExecution execution) {
-        if (!isCompletedProbe(execution)) return false;
-        String output = execution.output.toLowerCase(Locale.ROOT);
-        return output.contains("svc data")
-                && output.contains("enable")
-                && output.contains("disable");
-    }
-
-    private static boolean isCompletedProbe(CommandExecution execution) {
-        return execution.launched && !execution.timedOut && !execution.interrupted;
+    private static AirplaneState airplaneState(CommandExecution execution) {
+        if (!execution.isSuccess()) return AirplaneState.UNKNOWN;
+        String output = execution.output.trim().toLowerCase(Locale.ROOT);
+        if ("enabled".equals(output)) return AirplaneState.ENABLED;
+        if ("disabled".equals(output)) return AirplaneState.DISABLED;
+        return AirplaneState.UNKNOWN;
     }
 
     private static int statusForFailure(CommandExecution execution, int defaultStatus) {
@@ -279,6 +346,8 @@ final class MobileDataCommandEngine {
     private static long elapsedSince(long startedNanos) {
         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
+
+    private enum AirplaneState { ENABLED, DISABLED, UNKNOWN }
 
     private static final class ActionExecution {
         final CommandExecution effective;

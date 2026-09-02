@@ -1,6 +1,6 @@
 # JustProxy Python client
 
-`justproxy-client` 0.3.0b2 is a typed Python 3.9+ client and command-line interface for
+`justproxy-client` 0.3.0b3 is a typed Python 3.9+ client and command-line interface for
 the authenticated JustProxy control API. It uses only the Python standard
 library at runtime (`urllib`, `argparse`, `json`, and `dataclasses`).
 
@@ -24,7 +24,7 @@ python -m pip install ./python
 Or install the bundled v0.3 beta wheel:
 
 ```console
-python -m pip install dist/python/justproxy_client-0.3.0b2-py3-none-any.whl
+python -m pip install dist/python/justproxy_client-0.3.0b3-py3-none-any.whl
 ```
 
 Or directly from the public repository:
@@ -104,19 +104,29 @@ justproxy --compact metrics
 `rotate` and `rotate-ip` are intentionally different operations:
 
 - `rotate` calls `POST /v1/rotate`. It reconnects legacy-proxy sessions and
-  WireGuard forwarding flows, then schedules an IP check. It never toggles
-  mobile data.
+  WireGuard forwarding flows, then schedules an IP check. It never changes
+  airplane mode.
 - `rotate-ip` calls `POST /v1/ip-rotate`. It requests one Shizuku
-  mobile-data cycle, subsequent cellular recovery, and an IP check.
+  airplane-mode cycle, subsequent cellular recovery, and an IP check.
 
 `rotate-ip` is accepted only while JustProxy is running with cellular-only
 egress, Shizuku is ready, and no cycle or recovery is already active. Configure
 the disabled-by-default Android feature first: install Shizuku from its
 [official download page](https://shizuku.rikka.app/download/), complete the
 [official wireless-debugging setup](https://shizuku.rikka.app/guide/setup/),
-grant JustProxy access, and select an interval of 1–1440 minutes and data-off
-time of 1–10 seconds. The default data-off time is 1 second. Non-root Shizuku
+grant JustProxy access, and select an interval of 1–1440 minutes and an
+airplane-mode hold time of 1–10 seconds. The default hold time is 1 second.
+A current, context-capable Shizuku API 13 server is required. Non-root Shizuku
 must be started again after each phone reboot.
+
+When the computer reaches the phone over the same Wi-Fi router, configure the
+phone to keep Wi-Fi on during airplane mode before enabling rotation. On a
+Pixel, turn airplane mode on manually once, turn Wi-Fi back on and reconnect,
+then turn airplane mode off. Pixel remembers that Wi-Fi choice for later
+airplane-mode cycles. Automatic rotation through the phone's Wi-Fi hotspot is
+unsupported because airplane mode stops the hotspot and it may not return.
+Cycles also interrupt cellular calls/texts; keep the schedule disabled when
+uninterrupted phone service is needed.
 
 Both POST requests are asynchronous. An accepted response does **not** guarantee
 that the carrier assigns a different public IP. Read `ip_changed`,
@@ -124,13 +134,16 @@ that the carrier assigns a different public IP. Read `ip_changed`,
 the result; when `ip_changed` is `null`, the outcome is not known yet.
 Inspect `status.ip_rotation.last_outcome` or `ip-history` after the operation.
 The carrier may report the same public IP after any number of cycles.
+If the local Wi-Fi path drops before the HTTP response arrives, a connection
+error can mean the rotation already started. Reconnect, inspect status/history,
+and do not blindly retry the disruptive request.
 
 Shizuku recovery is best effort. JustProxy persists a recovery marker and the
-privileged service attempts to enable data in a finally path, but a phone
-reboot, Shizuku death, revoked debugging authorization, or OEM telephony failure
-during the off window can leave mobile data off. If
-`status.ip_rotation.recovery_required` is true or the app warns that mobile
-data may be off, enable it manually in Android settings before retrying.
+privileged service attempts to disable airplane mode in a finally path, but a
+phone reboot, Shizuku death, revoked debugging authorization, or OEM failure
+during the hold window can leave airplane mode on. If
+`status.ip_rotation.recovery_required` is true or the app warns that airplane
+mode may be on, disable it manually in Android settings before retrying.
 
 Generate authenticated proxy environment values using the host from the control
 URL, the `proxy_port` reported by `status`, and the configured proxy username:
@@ -198,6 +211,9 @@ print(reconnect.accepted, reconnect.action, reconnect.message)
 ip_rotation = client.rotate_ip()
 print(
     ip_rotation.accepted,
+    ip_rotation.mode,
+    ip_rotation.airplane_mode_seconds,
+    ip_rotation.data_off_seconds,
     ip_rotation.ip_changed,
     ip_rotation.get("guarantees_ip_change"),
     ip_rotation.message,
@@ -208,11 +224,13 @@ print(check.accepted, check.message)
 ```
 
 The response models are typed dataclasses. `Status.ip_rotation` describes
-whether the Shizuku feature is enabled and ready, its configured interval and
-data-off time, the next/last attempt, the last verified outcome, and whether
-manual recovery may be required. They also implement read-only-style
-mapping access and keep all server fields, including fields added by a newer
-server:
+whether the Shizuku feature is enabled and ready, its mode, configured interval
+and airplane-mode hold time, the next/last attempt, the last verified outcome,
+and whether manual recovery may be required. `RotationResult` exposes
+`mode` and `airplane_mode_seconds` too. The legacy `data_off_seconds`
+field remains available as a compatibility alias. Models also implement
+read-only-style mapping access and keep all server fields, including fields
+added by a newer server:
 
 ```python
 status = client.status()
@@ -289,12 +307,12 @@ environment = proxy_environment("192.0.2.10", 8888, **credentials)
 | `ip_history()` | `GET /v1/ip-history` | `IPHistory` |
 | `sessions()` | `GET /v1/sessions` | `Sessions` |
 | `rotate()` | `POST /v1/rotate` (sessions only) | `RotationResult` |
-| `rotate_ip()` | `POST /v1/ip-rotate` (Shizuku mobile-data cycle) | `RotationResult` |
+| `rotate_ip()` | `POST /v1/ip-rotate` (Shizuku airplane-mode cycle) | `RotationResult` |
 | `check_ip()` | `POST /v1/check-ip` | `IPCheckResult` |
 
 POST methods send an empty JSON object. The SDK intentionally does not retry
 mutating requests, so a network error cannot silently duplicate a reconnect or
-mobile-data cycle. If a `rotate_ip()` response is lost, inspect
+airplane-mode cycle. If a `rotate_ip()` response is lost, inspect
 `status().ip_rotation` before deciding whether to issue another request.
 
 ### Errors

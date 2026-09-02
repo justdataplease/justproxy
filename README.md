@@ -1,6 +1,6 @@
 # JustProxy
 
-JustProxy v0.3 beta turns an unrooted Android phone into a local WireGuard Internet gateway. Export a standard `.conf` file from the phone, import it into the official WireGuard client on a computer or another mobile device, and route that device's IPv4 and IPv6 TCP/UDP traffic through the phone's selected Android network. The existing authenticated HTTP/HTTPS CONNECT and SOCKS5 proxy remains available as an optional compatibility mode. An opt-in Shizuku integration can also cycle mobile data on supported phones in an attempt to request a new carrier IP.
+JustProxy v0.3 beta turns an unrooted Android phone into a local WireGuard Internet gateway. Export a standard `.conf` file from the phone, import it into the official WireGuard client on a computer or another mobile device, and route that device's IPv4 and IPv6 TCP/UDP traffic through the phone's selected Android network. The existing authenticated HTTP/HTTPS CONNECT and SOCKS5 proxy remains available as an optional compatibility mode. An opt-in Shizuku integration can also cycle airplane mode on supported phones in an attempt to request a new carrier IP.
 
 > Beta distribution: the Android APK is debug-signed and the Python package is pre-1.0. The WireGuard gateway is a one-peer beta, and Shizuku IP rotation is an experimental, disabled-by-default feature. These builds are for testing, not a production or app-store release.
 
@@ -51,7 +51,7 @@ Legacy proxy traffic follows a separate local HTTP/SOCKS5 listener. HTTPS uses C
 - Live run, today, and lifetime upload/download totals plus a combined run data cap.
 - Android-Keystore-encrypted WireGuard and proxy credentials.
 - Manual reconnect of proxy sessions and WireGuard flows.
-- Optional non-root Shizuku mobile-data cycling on supported stock Android devices.
+- Optional non-root Shizuku airplane-mode cycling on supported stock Android devices.
 - Separate scheduled session reconnect and privileged IP-rotation controls.
 - Optional authenticated HTTP/HTTPS CONNECT and SOCKS5 proxy.
 - Loopback-only USB proxy mode and opt-in hotspot/LAN proxy listener.
@@ -61,11 +61,11 @@ Legacy proxy traffic follows a separate local HTTP/SOCKS5 listener. HTTPS uses C
 
 ## Downloads
 
-The v0.3.0-beta.2 distribution set is:
+The v0.3.0-beta.3 distribution set is:
 
-- `android/JustProxy-android-0.3.0-beta.2-debug.apk`
-- `python/justproxy_client-0.3.0b2-py3-none-any.whl`
-- `python/justproxy_client-0.3.0b2.tar.gz`
+- `android/JustProxy-android-0.3.0-beta.3-debug.apk`
+- `python/justproxy_client-0.3.0b3-py3-none-any.whl`
+- `python/justproxy_client-0.3.0b3.tar.gz`
 - `SHA256SUMS.txt`
 - [Artifact notes](dist/README.md)
 
@@ -169,7 +169,7 @@ The result should match the public IP shown in JustProxy. With cellular-only ena
 Install the v0.3 beta wheel after it has been published to the distribution folder:
 
 ~~~powershell
-py -m pip install dist/python/justproxy_client-0.3.0b2-py3-none-any.whl
+py -m pip install dist/python/justproxy_client-0.3.0b3-py3-none-any.whl
 ~~~
 
 CLI examples:
@@ -203,7 +203,7 @@ client = JustProxyClient(
 print(client.status())
 print(client.metrics())
 reconnect = client.rotate()       # POST /v1/rotate: sessions only
-ip_rotation = client.rotate_ip() # POST /v1/ip-rotate: Shizuku mobile-data cycle
+ip_rotation = client.rotate_ip() # POST /v1/ip-rotate: Shizuku airplane-mode cycle
 print(reconnect)
 print(ip_rotation)
 print(client.requests_proxies(
@@ -222,12 +222,14 @@ JustProxy v0.3 deliberately keeps these actions separate:
 
 | Goal | Android control | Control API | Python |
 | --- | --- | --- | --- |
-| Reconnect active flows without touching mobile data | **Reconnect** | `POST /v1/rotate` | `client.rotate()` / `justproxy rotate` |
-| Ask the carrier for another lease by cycling mobile data | **Rotate now** in the Shizuku card | `POST /v1/ip-rotate` | `client.rotate_ip()` / `justproxy rotate-ip` |
+| Reconnect active flows without changing phone radios | **Reconnect** | `POST /v1/rotate` | `client.rotate()` / `justproxy rotate` |
+| Ask the carrier for another lease by cycling airplane mode | **Rotate now** in the Shizuku card | `POST /v1/ip-rotate` | `client.rotate_ip()` / `justproxy rotate-ip` |
 
-**Reconnect** closes active legacy-proxy sessions, restarts WireGuard forwarding flows, and schedules a public-IP check. Its existing 0-to-1440-minute schedule remains independent of automatic IP rotation. It does not toggle mobile data.
+**Reconnect** closes active legacy-proxy sessions, restarts WireGuard forwarding flows, and schedules a public-IP check. Its existing 0-to-1440-minute schedule remains independent of automatic IP rotation. It does not change airplane mode or mobile data.
 
-**Automatic IP rotation (Shizuku)** is an optional v0.3 beta. When it is ready, JustProxy stops its data planes, asks the Shizuku UserService to disable mobile data briefly, attempts to enable it again, waits for Android to report data enabled and for a fresh cellular `Network`, restarts forwarding, and checks the public IP. The request is asynchronous: an accepted `/v1/ip-rotate` response means that work was scheduled, not that the IP changed. Read `status.ip_rotation.last_outcome` and the IP history for the verified result.
+**Automatic IP rotation (Shizuku)** is an optional v0.3 beta. When it is ready, JustProxy stops forwarding, asks the Shizuku UserService to turn airplane mode on, waits for the existing cellular `Network` to disappear, holds airplane mode for the configured 1-to-10-second period, and always attempts to turn airplane mode off in a `finally` path. After Android confirms airplane mode is off, JustProxy requests a fresh cellular `Network`, restarts forwarding, and checks the public IP. The cellular-loss wait is bounded at 15 seconds and is separate from the configured hold time. The request is asynchronous: an accepted `/v1/ip-rotate` response means that work was scheduled, not that the IP changed. Read `status.ip_rotation.last_outcome` and the IP history for the verified result.
+
+The privileged operation uses only AOSP's fixed `cmd connectivity airplane-mode` query/enable/disable argument vectors; it never accepts an arbitrary shell command. See the [AOSP ConnectivityService command implementation](https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/heads/main/service/src/com/android/server/ConnectivityService.java).
 
 ### Set up Shizuku on a stock Pixel without root
 
@@ -238,23 +240,23 @@ Shizuku is a separate application and is not bundled with JustProxy. Use only an
 3. Open **Settings > System > Developer options**. Enable **USB debugging**, then open and enable **Wireless debugging**. Perform pairing while the phone is connected to a trusted Wi-Fi network.
 4. In Shizuku choose **Start via Wireless debugging** and start pairing.
 5. In Android's **Wireless debugging** screen, tap **Pair device with pairing code**. Enter the displayed pairing code through the Shizuku notification, return to Shizuku, and tap **Start**. Pairing is normally needed once; starting is needed again after each reboot.
-6. Open JustProxy and tap **Set up Shizuku** in **Automatic IP rotation - Shizuku**. Approve JustProxy when Shizuku displays its access prompt. Shizuku 11 or newer is required.
-7. Keep **Cellular-only egress (fail closed)** enabled. Turn on automatic IP rotation, choose an interval from **1 to 1440 minutes**, and choose a mobile-data-off time from **1 to 10 seconds**. The default and recommended first test is **1 second**.
-8. Start JustProxy and wait for the Shizuku status to say it is ready. Tap **Rotate now** once and confirm that mobile data returns, cellular forwarding resumes, and the IP result becomes **changed**, **unchanged**, or **failed**.
+6. Open JustProxy and tap **Set up Shizuku** in **Automatic IP rotation - Shizuku**. Approve JustProxy when Shizuku displays its access prompt. A current, context-capable Shizuku API 13 server is required.
+7. Before testing, teach the Pixel to keep Wi-Fi on during airplane mode: while connected to the trusted router, manually turn airplane mode on, manually turn Wi-Fi back on and reconnect, then turn airplane mode off. Pixel remembers this choice on Android 11 and newer; see [Google's Pixel airplane-mode instructions](https://support.google.com/pixelphone/answer/12639358?hl=en).
+8. Keep **Cellular-only egress (fail closed)** enabled. Turn on automatic IP rotation, choose an interval from **1 to 1440 minutes**, and choose an airplane-mode hold from **1 to 10 seconds**. The default and recommended first test is **1 second**.
+9. Start JustProxy and wait for the Shizuku status to say it is ready. Tap **Rotate now** once and confirm that airplane mode turns off again, cellular forwarding resumes, and the IP result becomes **changed**, **unchanged**, or **failed**.
 
-After a reboot, start Shizuku again before expecting scheduled rotations. If Shizuku is stopped, permission is denied, the device rejects the telephony command, or cellular-only mode is off, JustProxy does not start an automatic data cycle. Pixel/stock Android is the initial compatibility target; modified OEM telephony stacks may not support the command even when Shizuku itself is running.
+After a reboot, start Shizuku again before expecting scheduled rotations. If Shizuku is stopped, permission is denied, the device rejects the connectivity command, or cellular-only mode is off, JustProxy does not start an automatic cycle. Pixel/stock Android is the initial compatibility target; modified OEM builds or device policy may reject the command even when Shizuku itself is running.
 
 ### Recovery and manual warning
 
 The default one-second interruption minimizes risk, but non-root recovery cannot be absolute:
 
-- JustProxy refuses to start a cycle when Android reports that mobile data is already disabled or cannot confirm that it is enabled. It will not turn on data that the user had already turned off.
-- Before disabling data, JustProxy synchronously stores a device-protected recovery marker. The Shizuku UserService attempts the enable command in a `finally` path, and the marker is cleared only after Android reports mobile data enabled.
-- Stop or restart requests received during a cycle wait for the restore attempt. A pending marker prevents another disable operation; when Shizuku becomes ready again, JustProxy attempts enable-only recovery.
-- If the enable command or verification fails, status and the foreground notification warn that mobile data may be off. Open Android network settings and turn mobile data on manually. Do not wait for JustProxy if connectivity is important.
-- A phone reboot, Shizuku process/server death, revoked debugging authorization, an OEM telephony failure, or Android killing both processes during the disabled window can prevent automatic recovery. Non-root Shizuku itself must be started again after every reboot, so JustProxy cannot promise that mobile data will always be restored.
-- The command acts on Android's current default data subscription. Treat this beta as a single/default-data-SIM feature and do not switch the default SIM during a cycle.
-- Keep the Wi-Fi/hotspot path that carries WireGuard locally available when possible. Do not use airplane mode: it can also tear down that client-to-phone path.
+- JustProxy's local and privileged preflights refuse to start when mobile data is already disabled, when airplane mode is already enabled, or when Android cannot verify either starting state. Do not toggle airplane mode manually while a rotation or recovery is pending: the fail-safe marker prioritizes restoring connectivity and cannot prove ownership across a Binder crash.
+- Before the enable command, JustProxy synchronously stores a device-protected, mode-aware recovery marker. Once enabling airplane mode is attempted, the UserService always attempts the disable command in a `finally` path; the marker is cleared only after Android reports airplane mode disabled.
+- Stop or restart requests received during a cycle wait for the restore attempt. A pending marker prevents another cycle; when Shizuku becomes ready again, JustProxy attempts disable-only airplane-mode recovery. A marker left by beta.2 is migrated safely through its enable-only mobile-data recovery path.
+- If the disable command or verification fails, status and the foreground notification warn that airplane mode may still be on. Turn airplane mode off manually, then tap **Retry recovery**. Do not wait for JustProxy if connectivity is important.
+- A phone reboot, Shizuku process/server death, revoked debugging authorization, an OEM connectivity failure, or Android killing both processes during the enabled window can prevent automatic recovery. Non-root Shizuku itself must be started again after every reboot, so JustProxy cannot promise automatic restoration.
+- Airplane mode interrupts cellular calls, SMS/IMS service, and other radios; it can also disconnect the local WireGuard tunnel. Leave the schedule disabled when uninterrupted phone service is needed. Same-router use works after the Pixel Wi-Fi preparation step above. Automatic rotation through the phone's hotspot is unsupported because the hotspot can stop and may not restart automatically.
 
 The carrier may return the **same public IP** after one cycle or any number of cycles. `guarantees_ip_change` is always `false`; trust the observed **changed**, **unchanged**, or **failed** result.
 
@@ -263,8 +265,8 @@ The carrier may return the **same public IP** after one cycle or any number of c
 If Shizuku is unavailable or you leave the beta feature disabled:
 
 1. Leave the phone's Wi-Fi/hotspot path available to the client when possible.
-2. Manually turn **mobile data** off.
-3. Wait briefly, then turn mobile data on and wait for cellular service to return.
+2. Manually turn **airplane mode** on.
+3. Wait for cellular service to disappear, then turn airplane mode off and wait for cellular service to return.
 4. Allow the WireGuard client to re-handshake, then tap **Check IP** in JustProxy.
 5. Trust the reported observation: **changed**, **unchanged**, or **check failed**.
 
@@ -295,11 +297,11 @@ The public-IP check contacts https://api.ipify.org over the selected Android net
 | Allow private/LAN destinations | Advanced legacy-proxy destination override; off by default |
 | WireGuard UDP port | Local encrypted listener; default 51820 and must differ from proxy/control ports |
 | Proxy port | Proxy listener; control API uses the next port |
-| Reconnect interval | 0 disables; 1 to 1440 minutes schedules proxy/WireGuard flow reconnect without toggling mobile data |
-| Automatic IP rotation - Shizuku | Disabled by default; cycles mobile data only when cellular-only egress and Shizuku are ready |
+| Reconnect interval | 0 disables; 1 to 1440 minutes schedules proxy/WireGuard flow reconnect without changing phone radios |
+| Automatic IP rotation - Shizuku | Disabled by default; cycles airplane mode only when cellular-only egress and Shizuku are ready |
 | IP-rotation interval | 1 to 1440 minutes; independent of the reconnect interval |
-| Data-off time | 1 to 10 seconds; default 1 second |
-| Rotate now | Requests one Shizuku mobile-data cycle; unavailable while another cycle or recovery is active |
+| Airplane-mode hold | 1 to 10 seconds after cellular disconnects; default 1 second |
+| Rotate now | Requests one Shizuku airplane-mode cycle; unavailable while another cycle or recovery is active |
 | Idle timeout | Closes legacy proxy sessions with no activity |
 | Maximum connections | Bounds concurrent legacy proxy sessions |
 | Data cap | Stops the run after the combined gateway/proxy MiB estimate; the run survives network flaps and resets on stop/start or process recreation |
@@ -320,15 +322,15 @@ Authorization: Bearer PHONE_PASSWORD
 | GET | /v1/metrics | Run/today/lifetime totals plus WireGuard bytes and flow counts |
 | GET | /v1/ip-history | Recent public-IP observations |
 | GET | /v1/sessions | Recent sanitized session metadata |
-| POST | /v1/rotate | Close/reconnect sessions without toggling mobile data, then schedule an IP check |
-| POST | /v1/ip-rotate | Request one Shizuku mobile-data cycle and subsequent IP check |
+| POST | /v1/rotate | Close/reconnect sessions without changing phone radios, then schedule an IP check |
+| POST | /v1/ip-rotate | Request one Shizuku airplane-mode cycle and subsequent IP check |
 | POST | /v1/check-ip | Schedule a public-IP check |
 
 Do not expose the control port through Internet port forwarding. Authentication is not a substitute for TLS on an untrusted network.
 
 For authenticated, well-formed action requests, the control API keeps the existing HTTP 200 envelope for compatibility. Always inspect `accepted`; a rejected action returns `accepted: false`, `action: "none"`, and a machine-readable `reason` instead of implying that work was scheduled.
 
-`POST /v1/ip-rotate` can briefly interrupt every JustProxy upstream flow and may leave mobile data needing manual recovery if Android or Shizuku fails during the operation. Possession of the control token therefore authorizes this disruptive action whenever the Shizuku feature is ready. Keep the API on loopback or a trusted private LAN. The response always reports `guarantees_ip_change: false`.
+`POST /v1/ip-rotate` can interrupt every JustProxy upstream flow and phone radio service, and may leave airplane mode needing manual recovery if Android or Shizuku fails. Possession of the control token authorizes this disruptive action whenever the feature is ready. Keep the API on loopback or a trusted private LAN. Successful scheduling returns `action: "airplane_mode_cycle_scheduled"`, `mode: "airplane_mode"`, and `airplane_mode_seconds`; beta.3 deliberately changes the beta.2 action/phase discriminators to describe the new operation, while the old `data_off_seconds` field remains as a compatibility alias. If Wi-Fi drops before the HTTP response arrives, a connection error can mean the outcome is unknown: reconnect, inspect status/history, and do not blindly retry. The response always reports `guarantees_ip_change: false`.
 
 The API never returns a WireGuard private key or an exportable client profile. Create, export, regenerate, and revoke the one peer only through the local Android UI.
 
@@ -382,7 +384,7 @@ The project includes integration tests for:
 - bounded listener saturation, authentication deadlines, connection caps, idle timeouts, rotation, and shutdown;
 - local-only ingress address policy;
 - authenticated control API routes;
-- Shizuku capability gating, fixed-command execution, command timeouts, data-enabled prechecks, finally-path restoration, persistent recovery markers, and lifecycle deferral;
+- Shizuku capability gating, fixed airplane-mode command execution, command timeouts, cellular-loss waiting, initial-state prechecks, finally-path disable, mode-aware recovery markers, beta.2 recovery migration, and lifecycle deferral;
 - separate `/v1/rotate` and `/v1/ip-rotate` behavior;
 - analytics sanitization, IP validation, live byte checkpoints, and local-day rollups;
 - Python SDK, CLI, WireGuard/IP-rotation model compatibility, `rotate_ip()` routing, error handling, and proxy URL helpers.
@@ -394,16 +396,17 @@ CI runs the Rust tests/lints, Android/JVM tests and lint, Python suite, native A
 Run this checklist on at least one supported stock Pixel before publishing a v0.3 beta:
 
 - [ ] Install the candidate APK and the official Shizuku app on a real, unrooted Pixel; record model, Android version, build number, carrier, SIM count, and Shizuku version.
-- [ ] Start Shizuku through wireless debugging, deny JustProxy access once, and verify no mobile-data command runs and existing WireGuard/proxy traffic is left online.
+- [ ] Start Shizuku through wireless debugging, deny JustProxy access once, and verify no airplane-mode command runs and existing WireGuard/proxy traffic is left online.
+- [ ] Perform the Pixel one-time Wi-Fi preparation, then verify Wi-Fi remains connected to the trusted router while airplane mode is on. Do not use a hotspot-dependent client for this recovery test.
 - [ ] Grant access, keep cellular-only egress enabled, use the one-second default, and confirm the card reaches **Ready**.
-- [ ] Establish a WireGuard tunnel, verify TCP and UDP through cellular, tap **Rotate now**, and confirm mobile data returns, a fresh cellular network is selected, WireGuard re-handshakes, and traffic resumes.
+- [ ] Establish a WireGuard tunnel, verify TCP and UDP through cellular, tap **Rotate now**, and confirm airplane mode turns off, a fresh cellular network is selected, WireGuard re-handshakes, and traffic resumes.
 - [ ] Confirm both possible valid carrier results are reported honestly: **changed** and **unchanged**. Never fail a test solely because the carrier returns the same IP.
 - [ ] Set the interval to one minute, observe exactly one scheduled cycle, then disable the switch and verify no later cycle occurs. Restore the intended release interval afterward.
-- [ ] Start with mobile data already off and verify JustProxy refuses the cycle and does not turn data on.
+- [ ] Start with airplane mode already on and verify JustProxy refuses the cycle and does not turn it off. Repeat with mobile data already off and verify no cycle starts.
 - [ ] Tap **Stop** and **Restart** during a cycle and verify the restore attempt finishes before the lifecycle action.
-- [ ] Kill only the JustProxy app process during the off window and verify the daemon UserService attempts restoration and the persisted state is reconciled when JustProxy returns.
-- [ ] Stop Shizuku or revoke debugging authorization during the off window. Verify `recovery_required` remains set, no second disable occurs, and JustProxy warns that mobile data may be off. Manually enable data, restart Shizuku, and verify recovery clears.
-- [ ] Reboot the phone and verify scheduled IP rotation remains unavailable until Shizuku is started again. Confirm the documented manual-recovery path; do not assume JustProxy can restore data before Shizuku is running.
+- [ ] Kill only the JustProxy app process during the enabled window and verify the daemon UserService attempts to disable airplane mode and the persisted state is reconciled when JustProxy returns.
+- [ ] Stop Shizuku or revoke debugging authorization during the enabled window. Verify `recovery_required` remains set, no second cycle occurs, and JustProxy warns that airplane mode may still be on. Manually turn it off, restart Shizuku, and verify recovery clears.
+- [ ] Reboot the phone and verify scheduled IP rotation remains unavailable until Shizuku is started again. Confirm the documented manual-recovery path; do not assume JustProxy can turn airplane mode off before Shizuku is running.
 - [ ] Verify `justproxy rotate` calls only `/v1/rotate`, while `justproxy rotate-ip` calls only `/v1/ip-rotate`.
 - [ ] Repeat the basic cycle with the client connected through the intended same-LAN or hotspot topology, and confirm there is no Wi-Fi egress fallback in cellular-only mode.
 - [ ] On a dual-SIM test device, do not change the default data SIM during a cycle; record the result as outside the initial single/default-SIM support target if behavior differs.
@@ -419,10 +422,11 @@ Run this checklist on at least one supported stock Pixel before publishing a v0.
 - No custom desktop application is shipped; an official WireGuard client is required for the full-device tunnel.
 - The optional SOCKS5 proxy still supports TCP CONNECT only; BIND and UDP ASSOCIATE are rejected.
 - Legacy proxy credentials are not encrypted on the local hop. Prefer USB or a trusted personal LAN/hotspot.
-- Session reconnect, manual mobile-data toggling, and Shizuku mobile-data cycling do not guarantee carrier-IP rotation.
+- Session reconnect, manual radio toggling, and Shizuku airplane-mode cycling do not guarantee carrier-IP rotation.
 - Shizuku IP rotation is disabled by default, initially targeted at stock Pixel/Android, requires cellular-only egress, and may be rejected by an OEM or device policy.
-- Non-root Shizuku must be started again after every reboot. If Shizuku or Android fails during the disabled window, mobile data may require manual re-enabling despite JustProxy's finally-path restore and persisted recovery marker.
-- The v0.3.0-beta.2 APK is a beta/debug build, not a Play Store production release.
+- Non-root Shizuku must be started again after every reboot. If Shizuku or Android fails during the enabled window, airplane mode may require manual disabling despite JustProxy's finally-path restore and persisted recovery marker.
+- Airplane-mode cycling can interrupt Wi-Fi; a phone hotspot can stop and may not recover automatically. Prefer a shared trusted router with Pixel configured to keep Wi-Fi on in airplane mode.
+- The v0.3.0-beta.3 APK is a beta/debug build, not a Play Store production release.
 - Public-IP checking depends on the external ipify endpoint.
 - Battery optimization and aggressive manufacturer task killers may stop long-running background networking despite the foreground service.
 - JustProxy requests a sticky service restart after an ordinary Android process kill, but Android and

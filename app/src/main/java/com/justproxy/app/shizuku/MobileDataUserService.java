@@ -15,10 +15,14 @@ public final class MobileDataUserService extends IMobileDataService.Stub {
                 new ProcessCommandExecutor(), Thread::sleep, Os::getuid);
     }
 
-    /** Preferred by Shizuku API 13; the special UserService Context is intentionally unused. */
+    /** Preferred by Shizuku API 13; its Context enables cellular-loss observation. */
     @Keep
     public MobileDataUserService(Context context) {
-        this();
+        engine = new MobileDataCommandEngine(
+                new ProcessCommandExecutor(),
+                Thread::sleep,
+                Os::getuid,
+                new AndroidCellularNetworkLossMonitorFactory(context));
     }
 
     @Override
@@ -34,6 +38,11 @@ public final class MobileDataUserService extends IMobileDataService.Stub {
     @Override
     public MobileDataCommandResult restore() {
         return engine.restore();
+    }
+
+    @Override
+    public MobileDataCommandResult restoreMobileData() {
+        return engine.restoreLegacyMobileData();
     }
 
     /** Reserved UserService transaction invoked by Shizuku when the service is removed. */

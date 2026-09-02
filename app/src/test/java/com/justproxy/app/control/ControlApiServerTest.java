@@ -46,14 +46,16 @@ public final class ControlApiServerTest {
                         try {
                             return new JSONObject()
                                     .put("accepted", true)
-                                    .put("action", "mobile_data_cycle_scheduled")
+                                    .put("action", "airplane_mode_cycle_scheduled")
                                     .put("previous_ip", JSONObject.NULL)
                                     .put("ip_changed", JSONObject.NULL)
                                     .put("manual_carrier_reset_required", false)
                                     .put("reason", JSONObject.NULL)
+                                    .put("mode", "airplane_mode")
+                                    .put("airplane_mode_seconds", 1)
                                     .put("data_off_seconds", 1)
                                     .put("guarantees_ip_change", false)
-                                    .put("message", "Mobile data will cycle and the public IP will be checked")
+                                    .put("message", "Airplane mode will cycle and the public IP will be checked")
                                     .toString();
                         } catch (JSONException exception) {
                             throw new AssertionError(exception);
@@ -91,14 +93,16 @@ public final class ControlApiServerTest {
         assertEquals(200, ipRotate.status);
         JSONObject ipRotateJson = new JSONObject(ipRotate.body);
         assertTrue(ipRotateJson.getBoolean("accepted"));
-        assertEquals("mobile_data_cycle_scheduled", ipRotateJson.getString("action"));
+        assertEquals("airplane_mode_cycle_scheduled", ipRotateJson.getString("action"));
         assertTrue(ipRotateJson.isNull("previous_ip"));
         assertTrue(ipRotateJson.isNull("ip_changed"));
         assertFalse(ipRotateJson.getBoolean("manual_carrier_reset_required"));
         assertTrue(ipRotateJson.isNull("reason"));
+        assertEquals("airplane_mode", ipRotateJson.getString("mode"));
+        assertEquals(1, ipRotateJson.getInt("airplane_mode_seconds"));
         assertEquals(1, ipRotateJson.getInt("data_off_seconds"));
         assertFalse(ipRotateJson.getBoolean("guarantees_ip_change"));
-        assertEquals("Mobile data will cycle and the public IP will be checked",
+        assertEquals("Airplane mode will cycle and the public IP will be checked",
                 ipRotateJson.getString("message"));
         assertEquals(1, ipRotations.get());
     }

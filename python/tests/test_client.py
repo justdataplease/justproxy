@@ -20,6 +20,7 @@ from justproxy_client import (  # noqa: E402
     IpRotationStatus,
     InvalidResponseError,
     JustProxyClient,
+    RotationResult,
     WireGuardStatus,
     http_proxy_url,
     proxy_environment,
@@ -60,6 +61,8 @@ STATUS = {
         "state": "ready",
         "message": "Ready",
         "interval_minutes": 60,
+        "mode": "airplane_mode",
+        "airplane_mode_seconds": 1,
         "data_off_seconds": 1,
         "next_at_ms": 1_700_003_600_000,
         "last_attempt_at_ms": 1_700_000_000_000,
@@ -120,20 +123,25 @@ SESSIONS = {
 
 ROTATION = {
     "accepted": True,
-    "action": "request_carrier_reset",
+    "action": "sessions_reconnect_scheduled",
     "previous_ip": "203.0.113.42",
     "ip_changed": None,
     "manual_carrier_reset_required": True,
-    "message": "Follow the carrier reset instructions, then check the IP again.",
+    "message": "Sessions will reconnect and the public IP will be checked",
 }
 
 IP_ROTATION = {
     "accepted": True,
-    "action": "mobile_data_cycle_scheduled",
+    "action": "airplane_mode_cycle_scheduled",
     "previous_ip": "203.0.113.42",
     "ip_changed": None,
     "manual_carrier_reset_required": False,
-    "message": "Mobile-data cycle scheduled.",
+    "reason": None,
+    "mode": "airplane_mode",
+    "airplane_mode_seconds": 1,
+    "data_off_seconds": 1,
+    "guarantees_ip_change": False,
+    "message": "Airplane mode will cycle and the public IP will be checked",
 }
 
 CHECK_IP = {
@@ -260,6 +268,8 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(ip_rotation.provider, "shizuku")
             self.assertEqual(ip_rotation.state, "ready")
             self.assertEqual(ip_rotation.interval_minutes, 60)
+            self.assertEqual(ip_rotation.mode, "airplane_mode")
+            self.assertEqual(ip_rotation.airplane_mode_seconds, 1)
             self.assertEqual(ip_rotation.data_off_seconds, 1)
             self.assertEqual(ip_rotation.next_at_ms, 1_700_003_600_000)
             self.assertEqual(
@@ -300,8 +310,11 @@ class ClientTests(unittest.TestCase):
             ip_rotation_request = client.rotate_ip()
             self.assertTrue(ip_rotation_request.accepted)
             self.assertEqual(
-                ip_rotation_request.action, "mobile_data_cycle_scheduled"
+                ip_rotation_request.action, "airplane_mode_cycle_scheduled"
             )
+            self.assertEqual(ip_rotation_request.mode, "airplane_mode")
+            self.assertEqual(ip_rotation_request.airplane_mode_seconds, 1)
+            self.assertEqual(ip_rotation_request.data_off_seconds, 1)
             self.assertIsNone(ip_rotation_request.ip_changed)
             self.assertFalse(
                 ip_rotation_request.manual_carrier_reset_required
@@ -363,6 +376,82 @@ class ClientTests(unittest.TestCase):
             self.assertIsNone(metrics.wireguard_downloaded_bytes)
             self.assertIsNone(metrics.wireguard_active_flows)
             self.assertIsNone(metrics.wireguard_total_flows)
+
+    def test_legacy_data_off_seconds_remains_available(self) -> None:
+        with FakeAPI() as api:
+            api.responses[("GET", "/v1/status")] = (
+                200,
+                {
+                    "state": "running",
+                    "ip_rotation": {
+                        "provider": "shizuku",
+                        "data_off_seconds": 3,
+                    },
+                },
+            )
+            status = JustProxyClient("secret-token", api.url).status()
+
+        self.assertIsNotNone(status.ip_rotation)
+        ip_rotation = status.ip_rotation
+        self.assertIsNotNone(ip_rotation)
+        self.assertEqual(ip_rotation.data_off_seconds, 3)
+        self.assertIsNone(ip_rotation.mode)
+        self.assertIsNone(ip_rotation.airplane_mode_seconds)
+
+    def test_beta2_positional_model_constructors_remain_compatible(self) -> None:
+        status = IpRotationStatus(
+            {"legacy": True},
+            True,
+            "shizuku",
+            "ready",
+            "Mobile-data control is ready",
+            10,
+            3,
+            100,
+            90,
+            "unchanged",
+            False,
+            False,
+        )
+        self.assertEqual(status.data_off_seconds, 3)
+        self.assertEqual(status.last_outcome, "unchanged")
+        self.assertIsNone(status.mode)
+        self.assertIsNone(status.airplane_mode_seconds)
+
+        rotation = RotationResult(
+            {"legacy": True},
+            True,
+            "mobile_data_cycle_scheduled",
+            "198.51.100.1",
+            None,
+            False,
+            "Mobile data will cycle and the public IP will be checked",
+        )
+        self.assertIsNone(rotation.data_off_seconds)
+        self.assertEqual(
+            rotation.message,
+            "Mobile data will cycle and the public IP will be checked",
+        )
+        self.assertIsNone(rotation.mode)
+        self.assertIsNone(rotation.airplane_mode_seconds)
+
+    def test_unmodified_beta2_rotation_response_still_parses(self) -> None:
+        rotation = RotationResult.from_dict(
+            {
+                "accepted": True,
+                "action": "mobile_data_cycle_scheduled",
+                "previous_ip": "198.51.100.1",
+                "ip_changed": None,
+                "manual_carrier_reset_required": False,
+                "data_off_seconds": 1,
+                "message": "Mobile data will cycle and the public IP will be checked",
+            }
+        )
+
+        self.assertTrue(rotation.accepted)
+        self.assertEqual(rotation.data_off_seconds, 1)
+        self.assertIsNone(rotation.mode)
+        self.assertIsNone(rotation.airplane_mode_seconds)
 
     def test_authentication_error_has_status_and_payload(self) -> None:
         with FakeAPI() as api:
@@ -570,7 +659,10 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result, 0)
         payload = json.loads(stdout.getvalue())
         self.assertTrue(payload["accepted"])
-        self.assertEqual(payload["action"], "mobile_data_cycle_scheduled")
+        self.assertEqual(payload["action"], "airplane_mode_cycle_scheduled")
+        self.assertEqual(payload["mode"], "airplane_mode")
+        self.assertEqual(payload["airplane_mode_seconds"], 1)
+        self.assertEqual(payload["data_off_seconds"], 1)
         self.assertIsNone(payload["ip_changed"])
         self.assertFalse(payload["manual_carrier_reset_required"])
         self.assertEqual(api.requests[-1]["method"], "POST")

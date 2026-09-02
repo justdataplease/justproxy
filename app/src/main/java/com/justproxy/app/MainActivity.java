@@ -178,10 +178,10 @@ public final class MainActivity extends Activity {
         shizukuRotateNowButton.setOnClickListener(view ->
                 new AlertDialog.Builder(this)
                         .setTitle("Rotate the carrier IP now?")
-                        .setMessage("JustProxy will turn mobile data off for "
+                        .setMessage("JustProxy will enable airplane mode, wait for cellular service to disconnect, keep airplane mode on for "
                                 + parseOrDefault(shizukuDataOffInput,
                                 settings.getShizukuDataOffSeconds())
-                                + " second(s), restore it, reconnect the gateway, and check the real public IP. The carrier may return the same IP.")
+                                + " second(s), then disable it, reconnect the gateway, and check the real public IP. This interrupts cellular calls/texts and may interrupt Wi-Fi. Phone-hotspot rotation is unsupported. The carrier may return the same IP.")
                         .setNegativeButton("Cancel", null)
                         .setPositiveButton("Rotate IP", (dialog, which) ->
                                 sendCommand(ProxyService.ACTION_ROTATE_IP, false))
@@ -245,7 +245,7 @@ public final class MainActivity extends Activity {
         int shizukuInterval = number(
                 shizukuIntervalInput, "Automatic IP rotation interval");
         int shizukuDataOff = number(
-                shizukuDataOffInput, "Mobile-data off time");
+                shizukuDataOffInput, "Airplane-mode hold time");
         requireRange(port, 1024, 65534, "Proxy port");
         requireRange(wireGuardPort, 1024, 65535, "WireGuard port");
         requireRange(rotation, 0, 1440, "Reconnect interval");
@@ -253,7 +253,7 @@ public final class MainActivity extends Activity {
         requireRange(max, 1, 64, "Maximum connections");
         requireRange(shizukuInterval, 1, 1440,
                 "Automatic IP rotation interval");
-        requireRange(shizukuDataOff, 1, 10, "Mobile-data off time");
+        requireRange(shizukuDataOff, 1, 10, "Airplane-mode hold time");
         if (cap < 0 || cap > 1_048_576L) {
             throw new IllegalArgumentException("Data cap must be 0 to 1048576 MiB");
         }
@@ -391,7 +391,8 @@ public final class MainActivity extends Activity {
         if (recoveryRequired) {
             message = status.isActive()
                     ? status.ipRotation.message
-                    : "Mobile data may be off. Restore it now or turn it on manually.";
+                    : mobileDataController.getManualRecoveryInstruction()
+                            + ", then retry recovery.";
         } else if (status.isActive()) {
             message = status.ipRotation.message;
         } else if (mobileDataAvailability != null) {
@@ -453,7 +454,7 @@ public final class MainActivity extends Activity {
         if (mobileDataController.isRecoveryRequired()) {
             if (status.isActive()) {
                 Toast.makeText(this,
-                        "Retrying mobile-data recovery",
+                        "Retrying airplane-mode recovery",
                         Toast.LENGTH_LONG).show();
                 sendCommand(ProxyService.ACTION_RECOVER_MOBILE_DATA, false);
             } else if (mobileDataController.getAvailability().isReady()) {
@@ -480,7 +481,7 @@ public final class MainActivity extends Activity {
             } else {
                 new AlertDialog.Builder(this)
                         .setTitle("Allow JustProxy in Shizuku")
-                        .setMessage("JustProxy uses Shizuku only for the fixed mobile-data enable/disable commands needed by Rotate IP. It cannot run arbitrary commands. You can leave automatic rotation disabled and keep using WireGuard normally.")
+                        .setMessage("JustProxy uses Shizuku only for the fixed airplane-mode commands needed by Rotate IP, plus a mobile-data restore command if a rotation from an older version was interrupted. It cannot run arbitrary commands. You can leave automatic rotation disabled and keep using WireGuard normally.")
                         .setNegativeButton("Cancel", null)
                         .setNeutralButton("Setup guide", (dialog, which) ->
                                 startActivity(new Intent(Intent.ACTION_VIEW,
@@ -493,7 +494,7 @@ public final class MainActivity extends Activity {
         }
         new AlertDialog.Builder(this)
                 .setTitle("Set up Shizuku")
-                .setMessage("Install and start Shizuku using Wireless debugging, then return here and tap Retry. JustProxy will ask for permission; root is not required.")
+                .setMessage("Install and start a current Shizuku with API 13 using Wireless debugging, then return here and tap Retry. JustProxy will ask for permission; root is not required.")
                 .setNegativeButton("Cancel", null)
                 .setNeutralButton("Retry", (dialog, which) ->
                         mobileDataController.requestPermission())
@@ -555,7 +556,8 @@ public final class MainActivity extends Activity {
                         String message = error.getMessage();
                         Toast.makeText(MainActivity.this,
                                 message == null
-                                        ? "Turn mobile data on, then retry recovery"
+                                        ? mobileDataController.getManualRecoveryInstruction()
+                                                + ", then retry recovery"
                                         : message,
                                 Toast.LENGTH_LONG).show();
                         renderStatus(ProxyService.getStatus());

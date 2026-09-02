@@ -12,80 +12,50 @@ import java.util.Deque;
 import java.util.List;
 
 public final class MobileDataCommandEngineTest {
+    private static final List<String> QUERY =
+            List.of("/system/bin/cmd", "connectivity", "airplane-mode");
+    private static final List<String> ENABLE =
+            List.of("/system/bin/cmd", "connectivity", "airplane-mode", "enable");
+    private static final List<String> DISABLE =
+            List.of("/system/bin/cmd", "connectivity", "airplane-mode", "disable");
+
     @Test
-    public void probeRecognizesCmdPhoneHelpDespiteNonZeroExit() {
-        FakeExecutor executor = new FakeExecutor(CommandExecution.completed(
-                255, "data enable: enable mobile data\ndata disable: disable mobile data"));
-        MobileDataCommandEngine engine = engine(executor, millis -> { });
+    public void probeRecognizesExactAirplaneModeState() {
+        FakeExecutor executor = new FakeExecutor(CommandExecution.completed(0, "disabled\n"));
+        MobileDataCommandEngine engine = engine(executor, millis -> { }, monitor(true));
 
         MobileDataCommandResult result = engine.probe();
 
         assertTrue(result.isSuccess());
         assertFalse(result.isFallbackUsed());
         assertEquals(2000, result.getServerUid());
+        assertEquals(List.of(QUERY), executor.commands);
+    }
+
+    @Test
+    public void probeRejectsFailureAndUnexpectedOutput() {
+        FakeExecutor failedExecutor = new FakeExecutor(
+                CommandExecution.completed(1, "disabled"));
+        FakeExecutor unexpectedExecutor = new FakeExecutor(
+                CommandExecution.completed(0, "airplane mode: disabled"));
+
         assertEquals(
-                List.of(List.of("/system/bin/cmd", "phone", "data", "help")),
-                executor.commands);
-    }
-
-    @Test
-    public void probeUsesSvcFallbackWhenCmdPhoneIsUnavailable() {
-        FakeExecutor executor = new FakeExecutor(
-                CommandExecution.completed(1, "unknown command"),
-                CommandExecution.completed(1, "usage: svc data [enable|disable]"));
-        MobileDataCommandEngine engine = engine(executor, millis -> { });
-
-        MobileDataCommandResult result = engine.probe();
-
-        assertTrue(result.isSuccess());
-        assertTrue(result.isFallbackUsed());
+                MobileDataCommandResult.STATUS_UNSUPPORTED,
+                engine(failedExecutor, millis -> { }, monitor(true)).probe().getStatus());
         assertEquals(
-                List.of(
-                        List.of("/system/bin/cmd", "phone", "data", "help"),
-                        List.of("/system/bin/svc", "data")),
-                executor.commands);
+                MobileDataCommandResult.STATUS_UNSUPPORTED,
+                engine(unexpectedExecutor, millis -> { }, monitor(true)).probe().getStatus());
     }
 
     @Test
-    public void probeRejectsMarkerlessOutputEvenWhenCommandsExitSuccessfully() {
+    public void cycleUsesOnlyFixedAirplaneVectorsWaitsForLossAndRestores() {
         FakeExecutor executor = new FakeExecutor(
-                CommandExecution.completed(0, "Telephony help is unavailable"),
-                CommandExecution.completed(0, "Available commands include data statistics"));
-        MobileDataCommandEngine engine = engine(executor, millis -> { });
-
-        MobileDataCommandResult result = engine.probe();
-
-        assertFalse(result.isSuccess());
-        assertEquals(MobileDataCommandResult.STATUS_UNSUPPORTED, result.getStatus());
-    }
-
-    @Test
-    public void probeRejectsTimedOutCmdHelpBeforeUsingSvcFallback() {
-        FakeExecutor executor = new FakeExecutor(
-                new CommandExecution(
-                        true,
-                        true,
-                        false,
-                        CommandExecution.NO_EXIT_CODE,
-                        8_000L,
-                        "data enable data disable",
-                        ""),
-                CommandExecution.completed(1, "usage: svc data [enable|disable]"));
-        MobileDataCommandEngine engine = engine(executor, millis -> { });
-
-        MobileDataCommandResult result = engine.probe();
-
-        assertTrue(result.isSuccess());
-        assertTrue(result.isFallbackUsed());
-    }
-
-    @Test
-    public void cycleUsesOnlyFixedArgumentVectorsAndRestores() {
-        FakeExecutor executor = new FakeExecutor(
+                CommandExecution.completed(0, "disabled"),
                 CommandExecution.completed(0, ""),
                 CommandExecution.completed(0, ""));
         List<Long> sleeps = new ArrayList<>();
-        MobileDataCommandEngine engine = engine(executor, sleeps::add);
+        FakeLossMonitor monitor = monitor(true);
+        MobileDataCommandEngine engine = engine(executor, sleeps::add, monitor);
 
         MobileDataCommandResult result = engine.cycle(1_000);
 
@@ -93,21 +63,97 @@ public final class MobileDataCommandEngineTest {
         assertTrue(result.isRestoreAttempted());
         assertTrue(result.isRestoreSucceeded());
         assertEquals(List.of(1_000L), sleeps);
-        assertEquals(
-                List.of(
-                        List.of("/system/bin/cmd", "phone", "data", "disable"),
-                        List.of("/system/bin/cmd", "phone", "data", "enable")),
-                executor.commands);
+        assertEquals(List.of(MobileDataCommandEngine.CELLULAR_LOSS_TIMEOUT_MILLIS),
+                monitor.timeouts);
+        assertTrue(monitor.closed);
+        assertEquals(List.of(QUERY, ENABLE, DISABLE), executor.commands);
     }
 
     @Test
-    public void interruptedDelayStillAttemptsEnableBeforeRestoringInterrupt() {
+    public void existingAirplaneModeIsNeverChanged() {
+        FakeExecutor executor = new FakeExecutor(CommandExecution.completed(0, "enabled"));
+        FakeLossMonitor monitor = monitor(true);
+
+        MobileDataCommandResult result =
+                engine(executor, millis -> { }, monitor).cycle(1_000);
+
+        assertEquals(MobileDataCommandResult.STATUS_INVALID_ARGUMENT, result.getStatus());
+        assertFalse(result.isRestoreAttempted());
+        assertEquals(List.of(QUERY), executor.commands);
+        assertFalse(monitor.opened);
+    }
+
+    @Test
+    public void unverifiedInitialStateRunsNoMutation() {
+        FakeExecutor executor = new FakeExecutor(CommandExecution.completed(0, "unknown"));
+
+        MobileDataCommandResult result =
+                engine(executor, millis -> { }, monitor(true)).cycle(1_000);
+
+        assertEquals(MobileDataCommandResult.STATUS_UNSUPPORTED, result.getStatus());
+        assertFalse(result.isRestoreAttempted());
+        assertEquals(List.of(QUERY), executor.commands);
+    }
+
+    @Test
+    public void unavailableCellularObserverFailsBeforeAirplaneMutation() {
         FakeExecutor executor = new FakeExecutor(
+                CommandExecution.completed(0, "disabled"));
+        MobileDataCommandEngine engine = new MobileDataCommandEngine(
+                executor,
+                millis -> { },
+                () -> 2000,
+                CellularNetworkLossMonitor.unavailableFactory());
+
+        MobileDataCommandResult result = engine.cycle(1_000);
+
+        assertEquals(MobileDataCommandResult.STATUS_INTERNAL_ERROR, result.getStatus());
+        assertFalse(result.isRestoreAttempted());
+        assertEquals(List.of(QUERY), executor.commands);
+    }
+
+    @Test
+    public void failedEnableStillAttemptsAirplaneDisable() {
+        FakeExecutor executor = new FakeExecutor(
+                CommandExecution.completed(0, "disabled"),
+                CommandExecution.completed(1, "enable failed"),
+                CommandExecution.completed(0, ""));
+
+        MobileDataCommandResult result =
+                engine(executor, millis -> { }, monitor(true)).cycle(1_000);
+
+        assertEquals(MobileDataCommandResult.STATUS_DISABLE_FAILED, result.getStatus());
+        assertTrue(result.isRestoreAttempted());
+        assertTrue(result.isRestoreSucceeded());
+        assertEquals(List.of(QUERY, ENABLE, DISABLE), executor.commands);
+    }
+
+    @Test
+    public void cellularLossTimeoutStillTurnsAirplaneModeOff() {
+        FakeExecutor executor = new FakeExecutor(
+                CommandExecution.completed(0, "disabled"),
+                CommandExecution.completed(0, ""),
+                CommandExecution.completed(0, ""));
+        List<Long> sleeps = new ArrayList<>();
+
+        MobileDataCommandResult result =
+                engine(executor, sleeps::add, monitor(false)).cycle(1_000);
+
+        assertEquals(MobileDataCommandResult.STATUS_TIMED_OUT, result.getStatus());
+        assertTrue(result.isRestoreSucceeded());
+        assertTrue(sleeps.isEmpty());
+        assertEquals(List.of(QUERY, ENABLE, DISABLE), executor.commands);
+    }
+
+    @Test
+    public void interruptedHoldRestoresBeforeInterruptIsReasserted() {
+        FakeExecutor executor = new FakeExecutor(
+                CommandExecution.completed(0, "disabled"),
                 CommandExecution.completed(0, ""),
                 CommandExecution.completed(0, ""));
         MobileDataCommandEngine engine = engine(executor, millis -> {
             throw new InterruptedException("test");
-        });
+        }, monitor(true));
 
         try {
             MobileDataCommandResult result = engine.cycle(1_000);
@@ -115,11 +161,7 @@ public final class MobileDataCommandEngineTest {
             assertEquals(MobileDataCommandResult.STATUS_INTERRUPTED, result.getStatus());
             assertTrue(result.isRestoreAttempted());
             assertTrue(result.isRestoreSucceeded());
-            assertEquals(
-                    List.of(
-                            List.of("/system/bin/cmd", "phone", "data", "disable"),
-                            List.of("/system/bin/cmd", "phone", "data", "enable")),
-                    executor.commands);
+            assertEquals(List.of(QUERY, ENABLE, DISABLE), executor.commands);
             assertTrue(Thread.currentThread().isInterrupted());
         } finally {
             Thread.interrupted();
@@ -127,31 +169,26 @@ public final class MobileDataCommandEngineTest {
     }
 
     @Test
-    public void failedCmdActionFallsBackToSvcAndStillRestores() {
+    public void disableFailureIsReportedAsUnrestored() {
         FakeExecutor executor = new FakeExecutor(
-                CommandExecution.completed(1, "cmd unavailable"),
+                CommandExecution.completed(0, "disabled"),
                 CommandExecution.completed(0, ""),
-                CommandExecution.completed(0, ""));
-        MobileDataCommandEngine engine = engine(executor, millis -> { });
+                CommandExecution.completed(1, "disable failed"));
 
-        MobileDataCommandResult result = engine.cycle(1_000);
+        MobileDataCommandResult result =
+                engine(executor, millis -> { }, monitor(true)).cycle(1_000);
 
-        assertTrue(result.isSuccess());
-        assertTrue(result.isFallbackUsed());
-        assertEquals(
-                List.of(
-                        List.of("/system/bin/cmd", "phone", "data", "disable"),
-                        List.of("/system/bin/svc", "data", "disable"),
-                        List.of("/system/bin/cmd", "phone", "data", "enable")),
-                executor.commands);
+        assertEquals(MobileDataCommandResult.STATUS_ENABLE_FAILED, result.getStatus());
+        assertTrue(result.isRestoreAttempted());
+        assertFalse(result.isRestoreSucceeded());
     }
 
     @Test
     public void invalidDurationRunsNoCommands() {
         FakeExecutor executor = new FakeExecutor();
-        MobileDataCommandEngine engine = engine(executor, millis -> { });
 
-        MobileDataCommandResult result = engine.cycle(999);
+        MobileDataCommandResult result =
+                engine(executor, millis -> { }, monitor(true)).cycle(999);
 
         assertEquals(MobileDataCommandResult.STATUS_INVALID_ARGUMENT, result.getStatus());
         assertFalse(result.isRestoreAttempted());
@@ -159,51 +196,78 @@ public final class MobileDataCommandEngineTest {
     }
 
     @Test
-    public void enableFailureIsReportedAsUnrestored() {
+    public void legacyRecoveryCanOnlyEnableDataAndUsesFallback() {
         FakeExecutor executor = new FakeExecutor(
-                CommandExecution.completed(0, ""),
-                CommandExecution.completed(1, "cmd enable failed"),
-                CommandExecution.completed(1, "svc enable failed"));
-        MobileDataCommandEngine engine = engine(executor, millis -> { });
+                CommandExecution.completed(1, "cmd unavailable"),
+                CommandExecution.completed(0, ""));
 
-        MobileDataCommandResult result = engine.cycle(1_000);
+        MobileDataCommandResult result =
+                engine(executor, millis -> { }, monitor(true)).restoreLegacyMobileData();
 
-        assertEquals(MobileDataCommandResult.STATUS_ENABLE_FAILED, result.getStatus());
-        assertTrue(result.isRestoreAttempted());
-        assertFalse(result.isRestoreSucceeded());
+        assertTrue(result.isSuccess());
         assertTrue(result.isFallbackUsed());
+        assertEquals(
+                List.of(
+                        List.of("/system/bin/cmd", "phone", "data", "enable"),
+                        List.of("/system/bin/svc", "data", "enable")),
+                executor.commands);
     }
 
     @Test
-    public void processExecutorRejectsAnythingOutsideAllowlistWithoutLaunching() {
+    public void processExecutorAllowsOnlyAirplaneAndLegacyEnableVectors() {
         ProcessCommandExecutor executor = new ProcessCommandExecutor();
 
-        CommandExecution result = executor.execute(
-                List.of("/system/bin/sh", "-c", "cmd phone data disable"), 1_000L);
+        CommandExecution query = executor.execute(QUERY, 1_000L);
+        CommandExecution enable = executor.execute(ENABLE, 1_000L);
+        CommandExecution disable = executor.execute(DISABLE, 1_000L);
+        CommandExecution legacyEnable = executor.execute(
+                List.of("/system/bin/cmd", "phone", "data", "enable"), 1_000L);
+        CommandExecution legacyDisable = executor.execute(
+                List.of("/system/bin/cmd", "phone", "data", "disable"), 1_000L);
+        CommandExecution shell = executor.execute(
+                List.of("/system/bin/sh", "-c", "cmd connectivity airplane-mode enable"),
+                1_000L);
 
-        assertFalse(result.launched);
-        assertTrue(result.error.contains("allowlist"));
-    }
-
-    @Test
-    public void processExecutorAllowsOnlyFixedNonMutatingProbeVectors() {
-        ProcessCommandExecutor executor = new ProcessCommandExecutor();
-
-        CommandExecution cmdProbe = executor.execute(
-                List.of("/system/bin/cmd", "phone", "data", "help"), 1_000L);
-        CommandExecution svcProbe = executor.execute(
-                List.of("/system/bin/svc", "data"), 1_000L);
-        CommandExecution extraArgument = executor.execute(
-                List.of("/system/bin/svc", "data", "help"), 1_000L);
-
-        assertFalse(cmdProbe.error.contains("allowlist"));
-        assertFalse(svcProbe.error.contains("allowlist"));
-        assertTrue(extraArgument.error.contains("allowlist"));
+        assertFalse(query.error.contains("allowlist"));
+        assertFalse(enable.error.contains("allowlist"));
+        assertFalse(disable.error.contains("allowlist"));
+        assertFalse(legacyEnable.error.contains("allowlist"));
+        assertTrue(legacyDisable.error.contains("allowlist"));
+        assertTrue(shell.error.contains("allowlist"));
     }
 
     private static MobileDataCommandEngine engine(
-            CommandExecutor executor, MobileDataCommandEngine.Sleeper sleeper) {
-        return new MobileDataCommandEngine(executor, sleeper, () -> 2000);
+            CommandExecutor executor,
+            MobileDataCommandEngine.Sleeper sleeper,
+            FakeLossMonitor monitor) {
+        return new MobileDataCommandEngine(executor, sleeper, () -> 2000, () -> {
+            monitor.opened = true;
+            return monitor;
+        });
+    }
+
+    private static FakeLossMonitor monitor(boolean lossObserved) {
+        return new FakeLossMonitor(lossObserved);
+    }
+
+    private static final class FakeLossMonitor implements CellularNetworkLossMonitor {
+        final boolean lossObserved;
+        final List<Long> timeouts = new ArrayList<>();
+        boolean opened;
+        boolean closed;
+
+        FakeLossMonitor(boolean lossObserved) {
+            this.lossObserved = lossObserved;
+        }
+
+        @Override public boolean awaitLoss(long timeoutMillis) {
+            timeouts.add(timeoutMillis);
+            return lossObserved;
+        }
+
+        @Override public void close() {
+            closed = true;
+        }
     }
 
     private static final class FakeExecutor implements CommandExecutor {

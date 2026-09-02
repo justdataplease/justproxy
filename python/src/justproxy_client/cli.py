@@ -38,7 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--compact", action="store_true", help="print compact JSON"
     )
-    parser.add_argument("--version", action="version", version="%(prog)s 0.3.0b2")
+    parser.add_argument("--version", action="version", version="%(prog)s 0.3.0b3")
 
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status", help="show service and current-IP status")
@@ -49,7 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands.add_parser(
         "rotate-ip",
-        help="request a Shizuku mobile-data cycle (a new IP is not guaranteed)",
+        help="request a Shizuku airplane-mode cycle (a new IP is not guaranteed)",
     )
     commands.add_parser("check-ip", help="request a fresh public-IP check")
     commands.add_parser("ip-history", help="show observed public-IP history")

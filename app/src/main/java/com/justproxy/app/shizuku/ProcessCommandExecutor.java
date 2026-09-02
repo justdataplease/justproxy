@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** Executes only the fixed mobile-data command vectors accepted by JustProxy. */
+/** Executes only the fixed airplane-mode and upgrade-recovery vectors accepted by JustProxy. */
 final class ProcessCommandExecutor implements CommandExecutor {
     private static final int MAX_OUTPUT_CHARS = 4_096;
     private static final long TERMINATION_GRACE_MILLIS = 250L;
@@ -18,7 +18,7 @@ final class ProcessCommandExecutor implements CommandExecutor {
         long startedNanos = System.nanoTime();
         if (!isAllowed(command)) {
             return CommandExecution.failedToStart(
-                    "Command rejected by the mobile-data allowlist", elapsedSince(startedNanos));
+                    "Command rejected by the JustProxy allowlist", elapsedSince(startedNanos));
         }
         if (timeoutMillis <= 0L) {
             return CommandExecution.failedToStart(
@@ -76,24 +76,16 @@ final class ProcessCommandExecutor implements CommandExecutor {
 
     private static boolean isAllowed(List<String> command) {
         if (command == null) return false;
-        if (command.equals(List.of("/system/bin/cmd", "phone", "data", "help"))) return true;
-        if (command.equals(List.of("/system/bin/svc", "data"))) return true;
-        if (command.size() != 4
-                || !"/system/bin/cmd".equals(command.get(0))
-                || !"phone".equals(command.get(1))
-                || !"data".equals(command.get(2))) {
-            if (command.size() != 3
-                    || !"/system/bin/svc".equals(command.get(0))
-                    || !"data".equals(command.get(1))) {
-                return false;
-            }
-            return isAction(command.get(2));
-        }
-        return isAction(command.get(3));
-    }
-
-    private static boolean isAction(String value) {
-        return "enable".equals(value) || "disable".equals(value);
+        if (command.equals(List.of(
+                "/system/bin/cmd", "connectivity", "airplane-mode"))) return true;
+        if (command.equals(List.of(
+                "/system/bin/cmd", "connectivity", "airplane-mode", "enable"))) return true;
+        if (command.equals(List.of(
+                "/system/bin/cmd", "connectivity", "airplane-mode", "disable"))) return true;
+        // Kept only so a beta.2 recovery marker can safely re-enable mobile data after upgrade.
+        if (command.equals(List.of(
+                "/system/bin/cmd", "phone", "data", "enable"))) return true;
+        return command.equals(List.of("/system/bin/svc", "data", "enable"));
     }
 
     private static void drain(

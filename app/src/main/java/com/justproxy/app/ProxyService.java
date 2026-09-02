@@ -183,7 +183,7 @@ public final class ProxyService extends Service {
             worker.execute(() -> {
                 if (mobileDataController.isRecoveryRequired()
                         && !ipRotationInProgress) {
-                    beginMobileDataRecovery("Checking mobile-data recovery");
+                    beginMobileDataRecovery("Checking connectivity recovery");
                 } else {
                     updateIdleIpRotationStatus();
                     updateStatus();
@@ -254,7 +254,7 @@ public final class ProxyService extends Service {
         refreshWireGuardProfilePresence("Waiting to start WireGuard");
         acquireWakeLock();
         if (mobileDataController.isRecoveryRequired()) {
-            beginMobileDataRecovery("Checking mobile data before startup");
+            beginMobileDataRecovery("Checking connectivity before startup");
         } else {
             continueStartupAfterMobileDataRecovery();
         }
@@ -313,8 +313,13 @@ public final class ProxyService extends Service {
                     execute(() -> {
                         if (!isCurrentCellularRequest(generation)) return;
                         if (!network.equals(cellularNetworkManager.getCellularNetwork())) return;
-                        if (network.equals(selectedNetwork)
-                                && configuredDataPlanesHealthy()) return;
+                        // The pre-cycle request stays alive only so the UserService can
+                        // observe actual cellular loss. Never restart forwarding from its
+                        // restoration callback before the privileged operation completes.
+                        if (!shouldStartDataPlanesOnCellularAvailable(
+                                ipRotationInProgress,
+                                network.equals(selectedNetwork),
+                                configuredDataPlanesHealthy())) return;
                         startDataPlanes(network);
                     });
                 }
@@ -356,6 +361,14 @@ public final class ProxyService extends Service {
 
     private boolean isCurrentCellularRequest(long generation) {
         return desiredRunning && generation == cellularRequestGeneration;
+    }
+
+    static boolean shouldStartDataPlanesOnCellularAvailable(
+            boolean ipRotationInProgress,
+            boolean selectedNetworkMatches,
+            boolean configuredDataPlanesHealthy) {
+        return !ipRotationInProgress
+                && !(selectedNetworkMatches && configuredDataPlanesHealthy);
     }
 
     private void scheduleCellularRetry(long generation) {
@@ -613,9 +626,9 @@ public final class ProxyService extends Service {
         if (ipRotationInProgress || mobileDataController.isRecoveryRequired()) {
             stopPendingAfterIpRotation = true;
             restartPendingAfterIpRotation = false;
-            serviceMessage = "Stopping after mobile data is restored";
+            serviceMessage = "Stopping after connectivity is restored";
             if (!ipRotationInProgress && mobileDataController.isRecoveryRequired()) {
-                beginMobileDataRecovery("Checking mobile data before stopping");
+                beginMobileDataRecovery("Checking connectivity before stopping");
             }
             updateStatus();
             return;
@@ -627,9 +640,9 @@ public final class ProxyService extends Service {
         if (ipRotationInProgress || mobileDataController.isRecoveryRequired()) {
             restartPendingAfterIpRotation = true;
             stopPendingAfterIpRotation = false;
-            serviceMessage = "Restarting after mobile data is restored";
+            serviceMessage = "Restarting after connectivity is restored";
             if (!ipRotationInProgress && mobileDataController.isRecoveryRequired()) {
-                beginMobileDataRecovery("Checking mobile data before restarting");
+                beginMobileDataRecovery("Checking connectivity before restarting");
             }
             updateStatus();
             return;
@@ -659,7 +672,7 @@ public final class ProxyService extends Service {
             return;
         }
         if (mobileDataController.isRecoveryRequired()) {
-            beginMobileDataRecovery("Checking a previous mobile-data cycle");
+            beginMobileDataRecovery("Checking a previous rotation recovery");
             return;
         }
         ShizukuMobileDataController.Availability availability = mobileDataAvailability;
@@ -676,35 +689,34 @@ public final class ProxyService extends Service {
         long generation = ++ipRotationGeneration;
         lastIpRotationAttemptAtMillis = System.currentTimeMillis();
         ipRotationPreviousIp = getAnalyticsSummary().getCurrentPublicIp();
-        ipRotationState = IpRotationStatus.State.TURNING_DATA_OFF;
+        ipRotationState = IpRotationStatus.State.TURNING_AIRPLANE_ON;
         int downSeconds = settings.getShizukuDataOffSeconds();
-        ipRotationMessage = "Cycling mobile data off for " + downSeconds
-                + (downSeconds == 1 ? " second" : " seconds");
+        ipRotationMessage = "Turning airplane mode on, then holding it for " + downSeconds
+                + (downSeconds == 1 ? " second" : " seconds")
+                + " after cellular disconnects";
         serviceMessage = ipRotationMessage;
         nextIpRotationAtMillis = 0;
         nextIpRotationElapsedRealtime = 0;
         checkpointTraffic(true);
         stopDataPlanes();
-        releaseCellularNetworkRequest();
-        selectedNetwork = null;
         updateStatus();
 
         mobileDataController.cycleAsync(downSeconds * 1_000,
                 new ShizukuMobileDataController.OperationCallback() {
                     @Override public void onResult(MobileDataCommandResult result) {
-                        execute(() -> finishMobileDataCycle(generation, result));
+                        execute(() -> finishAirplaneModeCycle(generation, result));
                     }
 
                     @Override public void onUnavailable(
                             ShizukuMobileDataController.Availability availability) {
-                        execute(() -> failMobileDataOperation(generation,
+                        execute(() -> failAirplaneModeOperation(generation,
                                 availability == null
                                         ? "Shizuku became unavailable"
                                         : availability.getMessage()));
                     }
 
                     @Override public void onError(Throwable error) {
-                        execute(() -> failMobileDataOperation(
+                        execute(() -> failAirplaneModeOperation(
                                 generation, safeMessage(error)));
                     }
                 });
@@ -731,7 +743,7 @@ public final class ProxyService extends Service {
                         IpRotationAdmissionCoordinator.REASON_SERVICE_UNAVAILABLE);
     }
 
-    private void finishMobileDataCycle(long generation,
+    private void finishAirplaneModeCycle(long generation,
                                        MobileDataCommandResult result) {
         if (generation != ipRotationGeneration) return;
         if (result != null && result.isSuccess() && result.isRestoreSucceeded()
@@ -739,8 +751,11 @@ public final class ProxyService extends Service {
             if (finishPendingLifecycleAction()) return;
             ipRotationAwaitingIpCheck = true;
             ipRotationState = IpRotationStatus.State.WAITING_FOR_CELLULAR;
-            ipRotationMessage = "Mobile data restored; waiting for cellular";
+            ipRotationMessage = "Airplane mode is off; waiting for fresh cellular";
             serviceMessage = ipRotationMessage;
+            stopDataPlanes();
+            releaseCellularNetworkRequest();
+            selectedNetwork = null;
             requestCellularNetwork();
             worker.schedule(() -> timeoutIpRotation(generation),
                     60, TimeUnit.SECONDS);
@@ -748,14 +763,14 @@ public final class ProxyService extends Service {
             return;
         }
         String message = result == null
-                ? "Mobile-data cycle returned no result" : result.getMessage();
-        failMobileDataOperation(generation, message);
+                ? "Airplane-mode cycle returned no result" : result.getMessage();
+        failAirplaneModeOperation(generation, message);
     }
 
-    private void failMobileDataOperation(long generation, String message) {
+    private void failAirplaneModeOperation(long generation, String message) {
         if (generation != ipRotationGeneration) return;
         if (mobileDataController.isRecoveryRequired()) {
-            ipRotationMessage = "Re-enable required: " + message;
+            ipRotationMessage = "Recovery required: " + message;
             beginMobileDataRecovery(ipRotationMessage);
             return;
         }
@@ -767,7 +782,7 @@ public final class ProxyService extends Service {
         ipRotationInProgress = true;
         ipRotationAwaitingIpCheck = false;
         long generation = ++ipRotationGeneration;
-        ipRotationState = IpRotationStatus.State.TURNING_DATA_ON;
+        ipRotationState = recoveryState();
         ipRotationMessage = message;
         serviceMessage = message;
         updateStatus();
@@ -796,7 +811,7 @@ public final class ProxyService extends Service {
         ipRotationInProgress = true;
         ipRotationAwaitingIpCheck = false;
         long generation = ++ipRotationGeneration;
-        ipRotationState = IpRotationStatus.State.TURNING_DATA_ON;
+        ipRotationState = recoveryState();
         ipRotationMessage = message;
         serviceMessage = message;
         updateStatus();
@@ -831,7 +846,8 @@ public final class ProxyService extends Service {
             beginMobileDataRestore(message + "; attempting Shizuku restore");
         } else {
             failMobileDataRestore(generation, message
-                    + ". Turn mobile data on manually, then tap Retry recovery.");
+                    + ". " + mobileDataController.getManualRecoveryInstruction()
+                    + ", then tap Retry recovery.");
         }
     }
 
@@ -843,10 +859,10 @@ public final class ProxyService extends Service {
             ipRotationInProgress = false;
             lastIpRotationOutcome = IpRotationStatus.Outcome.FAILED;
             ipRotationState = IpRotationStatus.State.READY;
-            ipRotationMessage = "Mobile data restored";
+            ipRotationMessage = "Connectivity restored";
             if (finishPendingLifecycleAction()) return;
             if (desiredRunning) {
-                serviceMessage = "Mobile data restored; waiting for cellular";
+                serviceMessage = "Connectivity restored; waiting for cellular";
                 continueStartupAfterMobileDataRecovery();
                 resetIpRotationDeadline();
             }
@@ -854,7 +870,7 @@ public final class ProxyService extends Service {
             return;
         }
         failMobileDataRestore(generation, result == null
-                ? "Mobile-data restore returned no result" : result.getMessage());
+                ? "Connectivity restore returned no result" : result.getMessage());
     }
 
     private void failMobileDataRestore(long generation, String message) {
@@ -865,7 +881,7 @@ public final class ProxyService extends Service {
         nextIpRotationElapsedRealtime = 0;
         lastIpRotationOutcome = IpRotationStatus.Outcome.FAILED;
         ipRotationState = IpRotationStatus.State.ERROR;
-        ipRotationMessage = "Mobile data may be off. Turn it on manually. " + message;
+        ipRotationMessage = recoveryWarning() + ". " + message;
         serviceMessage = ipRotationMessage;
         updateStatus();
         updateNotification();
@@ -911,7 +927,9 @@ public final class ProxyService extends Service {
         } else {
             if (finishPendingLifecycleAction()) return;
             resetIpRotationDeadline();
-            if (resumeNetwork && desiredRunning && selectedNetwork == null) {
+            if (resumeNetwork && desiredRunning) {
+                releaseCellularNetworkRequest();
+                selectedNetwork = null;
                 startConfiguredNetworkPath();
             }
         }
@@ -924,7 +942,7 @@ public final class ProxyService extends Service {
         if (mobileDataController.isRecoveryRequired()
                 && availability != null && availability.isReady()
                 && !ipRotationInProgress) {
-            beginMobileDataRecovery("Checking mobile-data recovery");
+            beginMobileDataRecovery("Checking connectivity recovery");
             return;
         }
         if (!ipRotationInProgress) updateIdleIpRotationStatus();
@@ -934,7 +952,7 @@ public final class ProxyService extends Service {
     private void updateIdleIpRotationStatus() {
         if (mobileDataController != null && mobileDataController.isRecoveryRequired()) {
             ipRotationState = IpRotationStatus.State.ERROR;
-            ipRotationMessage = "Mobile data may be off; recovery is required";
+            ipRotationMessage = recoveryWarning() + "; recovery is required";
             return;
         }
         boolean automaticEnabled = settings.isShizukuIpRotationEnabled();
@@ -976,6 +994,18 @@ public final class ProxyService extends Service {
                 ipRotationState = IpRotationStatus.State.NOT_RUNNING;
                 break;
         }
+    }
+
+    private IpRotationStatus.State recoveryState() {
+        return mobileDataController.isLegacyMobileDataRecoveryRequired()
+                ? IpRotationStatus.State.RESTORING_LEGACY_MOBILE_DATA
+                : IpRotationStatus.State.TURNING_AIRPLANE_OFF;
+    }
+
+    private String recoveryWarning() {
+        return mobileDataController.isLegacyMobileDataRecoveryRequired()
+                ? "Mobile data may still be off. Turn it on manually"
+                : "Airplane mode may still be on. Turn it off manually";
     }
 
     private void reloadWireGuardPeer() {
@@ -1108,7 +1138,7 @@ public final class ProxyService extends Service {
         ipRotationAwaitingIpCheck = false;
         if (error != null) {
             lastIpRotationOutcome = IpRotationStatus.Outcome.FAILED;
-            ipRotationMessage = "Mobile data was restored, but the public IP check failed";
+            ipRotationMessage = "Airplane mode was restored, but the public IP check failed";
         } else if (ipRotationPreviousIp != null
                 && !ipRotationPreviousIp.equals(publicIp)) {
             lastIpRotationOutcome = IpRotationStatus.Outcome.CHANGED;
@@ -1222,7 +1252,10 @@ public final class ProxyService extends Service {
                 lastIpRotationAttemptAtMillis,
                 lastIpRotationOutcome,
                 mobileDataController != null
-                        && mobileDataController.isRecoveryRequired());
+                        && mobileDataController.isRecoveryRequired(),
+                mobileDataController == null
+                        ? "airplane_mode"
+                        : mobileDataController.getRecoveryModeName());
     }
 
     private ProxyStatsSnapshot currentProxyStats() {
@@ -1633,26 +1666,8 @@ public final class ProxyService extends Service {
                         .put("downloaded_bytes", status.wireGuard.downloadedBytes)
                         .put("last_handshake_ms", status.wireGuard.lastHandshakeMillis == 0
                                 ? JSONObject.NULL : status.wireGuard.lastHandshakeMillis));
-                json.put("ip_rotation", new JSONObject()
-                        .put("enabled", status.ipRotation.enabled)
-                        .put("provider", status.ipRotation.provider)
-                        .put("state", status.ipRotation.state.name()
-                                .toLowerCase(Locale.ROOT))
-                        .put("message", status.ipRotation.message)
-                        .put("interval_minutes", status.ipRotation.intervalMinutes)
-                        .put("data_off_seconds", status.ipRotation.dataOffSeconds)
-                        .put("next_at_ms", status.ipRotation.nextAtMillis == 0
-                                ? JSONObject.NULL : status.ipRotation.nextAtMillis)
-                        .put("last_attempt_at_ms",
-                                status.ipRotation.lastAttemptAtMillis == 0
-                                        ? JSONObject.NULL
-                                        : status.ipRotation.lastAttemptAtMillis)
-                        .put("last_outcome", status.ipRotation.lastOutcome.name()
-                                .toLowerCase(Locale.ROOT))
-                        .put("recovery_required",
-                                status.ipRotation.recoveryRequired)
-                        .put("guarantees_ip_change",
-                                status.ipRotation.guaranteesIpChange));
+                json.put("ip_rotation",
+                        IpRotationApiJson.statusObject(status.ipRotation));
                 return json.toString();
             } catch (JSONException exception) {
                 return jsonFailure();
@@ -1752,39 +1767,23 @@ public final class ProxyService extends Service {
                     IpRotationAdmissionCoordinator.REASON_NOT_RUNNING.equals(reason)
                     ? "JustProxy is not running"
                     : IpRotationAdmissionCoordinator.REASON_RECOVERY_REQUIRED.equals(reason)
-                    ? "Mobile-data recovery must finish first"
+                    ? "Airplane-mode recovery must finish first"
                     : IpRotationAdmissionCoordinator.REASON_CELLULAR_ONLY_REQUIRED.equals(reason)
                     ? "Cellular-only egress is required"
                     : IpRotationAdmissionCoordinator.REASON_SHIZUKU_NOT_READY.equals(reason)
-                    ? "Shizuku mobile-data control is not ready"
+                    ? "Shizuku airplane-mode control is not ready"
                     : IpRotationAdmissionCoordinator.REASON_BUSY.equals(reason)
                     ? "An IP rotation is already pending or running"
                     : IpRotationAdmissionCoordinator.REASON_SERVICE_STOPPING.equals(reason)
                     ? "JustProxy is stopping"
                     : "IP rotation is temporarily unavailable";
-            try {
-                return new JSONObject()
-                        .put("accepted", accepted)
-                        .put("action", accepted
-                                ? "mobile_data_cycle_scheduled" : "none")
-                        .put("previous_ip", valueOrNull(accepted
-                                ? ipRotationPreviousIp : status.publicIp))
-                        .put("ip_changed", JSONObject.NULL)
-                        .put("manual_carrier_reset_required",
-                                !accepted && (recoveryRequired
-                                        || IpRotationAdmissionCoordinator
-                                        .REASON_RECOVERY_REQUIRED.equals(reason)))
-                        .put("reason", accepted ? JSONObject.NULL : reason)
-                        .put("data_off_seconds",
-                                settings.getShizukuDataOffSeconds())
-                        .put("guarantees_ip_change", false)
-                        .put("message", accepted
-                                ? "Mobile data will cycle and the public IP will be checked"
-                                : rejectionMessage)
-                        .toString();
-            } catch (JSONException exception) {
-                return jsonFailure();
-            }
+            return IpRotationApiJson.actionJson(
+                    accepted,
+                    accepted ? ipRotationPreviousIp : status.publicIp,
+                    recoveryRequired,
+                    reason,
+                    settings.getShizukuDataOffSeconds(),
+                    rejectionMessage);
         }
 
         @Override public String checkIpJson() {

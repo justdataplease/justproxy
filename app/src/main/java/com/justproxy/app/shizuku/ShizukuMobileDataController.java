@@ -1,6 +1,5 @@
 package com.justproxy.app.shizuku;
 
-import android.Manifest;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.ServiceConnection;
@@ -22,18 +21,22 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import rikka.shizuku.Shizuku;
 
-/** Main-process facade for Shizuku availability, permission, and safe mobile-data rotation. */
+/** Main-process facade for Shizuku availability and safe airplane-mode rotation. */
 public final class ShizukuMobileDataController implements AutoCloseable {
     public static final int MIN_DOWN_TIME_MILLIS = MobileDataCommandEngine.MIN_DOWN_TIME_MILLIS;
     public static final int MAX_DOWN_TIME_MILLIS = MobileDataCommandEngine.MAX_DOWN_TIME_MILLIS;
 
     private static final int PERMISSION_REQUEST_CODE = 0x4a50;
-    private static final int USER_SERVICE_PROTOCOL_VERSION = 2;
+    private static final int USER_SERVICE_PROTOCOL_VERSION = 3;
+    // Keep the beta.2 identity so protocol version 3 replaces its daemon on upgrade.
     private static final String USER_SERVICE_TAG = "justproxy-mobile-data";
+    private static final String NETWORK_SETTINGS_PERMISSION =
+            "android.permission.NETWORK_SETTINGS";
     private static final String RECOVERY_PREFERENCES = "justproxy_mobile_data_recovery";
     private static final String RECOVERY_REQUIRED_KEY = "recovery_required";
-    private static final long ENABLE_VERIFY_TIMEOUT_MILLIS = 5_000L;
-    private static final long ENABLE_VERIFY_POLL_MILLIS = 250L;
+    private static final String RECOVERY_MODE_KEY = "recovery_mode";
+    private static final long RESTORE_VERIFY_TIMEOUT_MILLIS = 5_000L;
+    private static final long RESTORE_VERIFY_POLL_MILLIS = 250L;
     private static final int MAX_REBIND_ATTEMPTS = 3;
     private static final long REBIND_BASE_DELAY_MILLIS = 500L;
 
@@ -119,13 +122,16 @@ public final class ShizukuMobileDataController implements AutoCloseable {
     private final MobileDataStateReader dataStateReader;
     private final MobileDataStatePoller dataStatePoller;
     private final RecoveryReconciler recoveryReconciler;
+    private final AirplaneModeStateReader airplaneStateReader;
+    private final AirplaneModeStatePoller airplaneStatePoller;
+    private final AirplaneModeRecoveryReconciler airplaneRecoveryReconciler;
     private final Shizuku.UserServiceArgs userServiceArgs;
     private final AtomicBoolean operationInFlight = new AtomicBoolean();
     private final BoundedRetryGate rebindRetryGate =
             new BoundedRetryGate(MAX_REBIND_ATTEMPTS);
 
     private volatile Availability availability = new Availability(
-            State.STOPPED, "Shizuku mobile-data control is stopped", -1, false, false);
+            State.STOPPED, "Shizuku airplane-mode control is stopped", -1, false, false);
     private volatile IMobileDataService remoteService;
     private volatile boolean started;
     private volatile boolean closed;
@@ -157,7 +163,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
             }
             remoteService = candidate;
             resetRebindState();
-            publish(State.READY, "Mobile-data control is ready", true, false);
+            publish(State.READY, "Airplane-mode control is ready", true, false);
         }
 
         @Override
@@ -168,14 +174,14 @@ public final class ShizukuMobileDataController implements AutoCloseable {
                 if (isBinderAliveSafely()) {
                     publish(
                             State.BINDING,
-                            "Mobile-data UserService disconnected; retrying",
+                            "Airplane-mode UserService disconnected; retrying",
                             hasPermissionSafely(),
                             false);
                     scheduleRebind();
                 } else {
                     publish(
                             State.WAITING_FOR_SHIZUKU,
-                            "Mobile-data UserService disconnected",
+                            "Airplane-mode UserService disconnected",
                             false,
                             false);
                 }
@@ -198,7 +204,12 @@ public final class ShizukuMobileDataController implements AutoCloseable {
         dataStatePoller = new MobileDataStatePoller(
                 dataStateReader, System::nanoTime, Thread::sleep);
         recoveryReconciler = new RecoveryReconciler(
-                dataStateReader, () -> setRecoveryRequired(false), System::nanoTime);
+                dataStateReader, this::clearRecoveryRequired, System::nanoTime);
+        airplaneStateReader = new AndroidAirplaneModeStateReader(applicationContext);
+        airplaneStatePoller = new AirplaneModeStatePoller(
+                airplaneStateReader, System::nanoTime, Thread::sleep);
+        airplaneRecoveryReconciler = new AirplaneModeRecoveryReconciler(
+                airplaneStateReader, this::clearRecoveryRequired, System::nanoTime);
         userServiceArgs = new Shizuku.UserServiceArgs(
                 new ComponentName(applicationContext, MobileDataUserService.class))
                 .daemon(true)
@@ -245,13 +256,30 @@ public final class ShizukuMobileDataController implements AutoCloseable {
         return availability;
     }
 
-    /** True after a cycle begins until Android positively reports mobile data enabled. */
+    /** True after a cycle begins until Android positively reports the prior safe state. */
     public boolean isRecoveryRequired() {
         return recoveryPreferences.getBoolean(RECOVERY_REQUIRED_KEY, false);
     }
 
+    public boolean isLegacyMobileDataRecoveryRequired() {
+        return isRecoveryRequired()
+                && getRecoveryMode() == RecoveryModePolicy.Mode.LEGACY_MOBILE_DATA;
+    }
+
+    public String getRecoveryModeName() {
+        return isLegacyMobileDataRecoveryRequired()
+                ? RecoveryModePolicy.LEGACY_MOBILE_DATA_VALUE
+                : RecoveryModePolicy.AIRPLANE_MODE_VALUE;
+    }
+
+    public String getManualRecoveryInstruction() {
+        return isLegacyMobileDataRecoveryRequired()
+                ? "Turn mobile data on manually"
+                : "Turn airplane mode off manually";
+    }
+
     public void probeAsync(OperationCallback callback) {
-        executeAsync(false, false, callback, IMobileDataService::probe);
+        executeAsync(null, null, false, callback, IMobileDataService::probe);
     }
 
     public void cycleAsync(int downTimeMillis, OperationCallback callback) {
@@ -259,18 +287,27 @@ public final class ShizukuMobileDataController implements AutoCloseable {
         if (downTimeMillis < MIN_DOWN_TIME_MILLIS
                 || downTimeMillis > MAX_DOWN_TIME_MILLIS) {
             dispatch(() -> callback.onError(new IllegalArgumentException(
-                    "Mobile-data off time must be between 1 and 10 seconds")));
+                    "Airplane-mode time must be between 1 and 10 seconds")));
             return;
         }
-        executeAsync(true, true, callback, service -> service.cycle(downTimeMillis));
+        executeAsync(
+                RecoveryModePolicy.Mode.AIRPLANE_MODE,
+                RecoveryModePolicy.Mode.AIRPLANE_MODE,
+                true,
+                callback,
+                service -> service.cycle(downTimeMillis));
     }
 
     public void restoreAsync(OperationCallback callback) {
-        executeAsync(true, false, callback, IMobileDataService::restore);
+        RecoveryModePolicy.Mode recoveryMode = getRecoveryMode();
+        RemoteOperation operation = recoveryMode == RecoveryModePolicy.Mode.LEGACY_MOBILE_DATA
+                ? IMobileDataService::restoreMobileData
+                : IMobileDataService::restore;
+        executeAsync(null, recoveryMode, false, callback, operation);
     }
 
     /**
-     * Clears a stale recovery marker only when Android positively reports mobile data enabled.
+     * Clears a stale recovery marker only when Android positively reports the expected safe state.
      * This local check does not require Shizuku to be installed, started, permitted, or bound.
      */
     public void reconcileRecoveryAsync(OperationCallback callback) {
@@ -282,7 +319,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
         }
         if (!operationInFlight.compareAndSet(false, true)) {
             dispatch(() -> callback.onError(
-                    new IllegalStateException("Another mobile-data operation is already running")));
+                    new IllegalStateException("Another airplane-mode operation is already running")));
             return;
         }
         try {
@@ -290,7 +327,9 @@ public final class ShizukuMobileDataController implements AutoCloseable {
                 MobileDataCommandResult result = null;
                 RuntimeException failure = null;
                 try {
-                    result = recoveryReconciler.reconcile();
+                    result = getRecoveryMode() == RecoveryModePolicy.Mode.AIRPLANE_MODE
+                            ? airplaneRecoveryReconciler.reconcile()
+                            : recoveryReconciler.reconcile();
                 } catch (RuntimeException exception) {
                     failure = exception;
                 } finally {
@@ -314,7 +353,8 @@ public final class ShizukuMobileDataController implements AutoCloseable {
     }
 
     private void executeAsync(
-            boolean markRecovery,
+            RecoveryModePolicy.Mode markRecoveryMode,
+            RecoveryModePolicy.Mode verifyRecoveryMode,
             boolean requireInitiallyEnabled,
             OperationCallback callback,
             RemoteOperation operation) {
@@ -328,7 +368,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
         }
         if (!operationInFlight.compareAndSet(false, true)) {
             dispatch(() -> callback.onError(
-                    new IllegalStateException("Another mobile-data operation is already running")));
+                    new IllegalStateException("Another airplane-mode operation is already running")));
             return;
         }
 
@@ -338,17 +378,25 @@ public final class ShizukuMobileDataController implements AutoCloseable {
                 RemoteException remoteFailure = null;
                 RuntimeException runtimeFailure = null;
                 try {
-                    if (requireInitiallyEnabled) requireMobileDataEnabled();
-                    if (markRecovery && !setRecoveryRequired(true)) {
+                    if (requireInitiallyEnabled) requireRotationReady();
+                    if (markRecoveryMode != null
+                            && !setRecoveryRequired(markRecoveryMode)) {
                         throw new IllegalStateException(
-                                "Could not persist the mobile-data recovery marker");
+                                "Could not persist the airplane-mode recovery marker");
                     }
 
                     result = operation.call(service);
                     if (result == null) {
                         throw new RemoteException("Shizuku UserService returned no result");
                     }
-                    result = verifyRestoreIfNeeded(result);
+                    if (markRecoveryMode != null && !result.isRestoreAttempted()) {
+                        if (!clearRecoveryRequired()) {
+                            throw new IllegalStateException(
+                                    "Cycle did not change airplane mode, but its recovery marker could not be cleared");
+                        }
+                    } else {
+                        result = verifyRestoreIfNeeded(result, verifyRecoveryMode);
+                    }
                 } catch (RemoteException exception) {
                     remoteFailure = exception;
                 } catch (RuntimeException exception) {
@@ -374,7 +422,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
                     dispatch(() -> callback.onResult(terminalResult));
                 } else {
                     dispatch(() -> callback.onError(
-                            new IllegalStateException("Mobile-data operation produced no result")));
+                            new IllegalStateException("Airplane-mode operation produced no result")));
                 }
             });
         } catch (RejectedExecutionException exception) {
@@ -389,7 +437,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
         if (closeRequested) cleanupBinding();
     }
 
-    private void requireMobileDataEnabled() {
+    private void requireRotationReady() {
         MobileDataStateReader.State state = dataStateReader.read();
         if (state == MobileDataStateReader.State.DISABLED) {
             throw new IllegalStateException(
@@ -399,13 +447,49 @@ public final class ShizukuMobileDataController implements AutoCloseable {
             throw new IllegalStateException(
                     "Android could not verify that mobile data is enabled; cycle was not started");
         }
+        AirplaneModeStateReader.State airplaneState = airplaneStateReader.read();
+        if (airplaneState == AirplaneModeStateReader.State.ENABLED) {
+            throw new IllegalStateException(
+                    "Airplane mode is already on; cycle was not started");
+        }
+        if (airplaneState != AirplaneModeStateReader.State.DISABLED) {
+            throw new IllegalStateException(
+                    "Android could not verify that airplane mode is off; cycle was not started");
+        }
     }
 
-    private MobileDataCommandResult verifyRestoreIfNeeded(MobileDataCommandResult result) {
+    private MobileDataCommandResult verifyRestoreIfNeeded(
+            MobileDataCommandResult result, RecoveryModePolicy.Mode recoveryMode) {
         if (!result.isRestoreAttempted()) return result;
-        MobileDataStateReader.State state = waitForEnabledState();
+        if (recoveryMode == RecoveryModePolicy.Mode.AIRPLANE_MODE) {
+            AirplaneModeStateReader.State state = airplaneStatePoller.awaitDisabled(
+                    RESTORE_VERIFY_TIMEOUT_MILLIS, RESTORE_VERIFY_POLL_MILLIS);
+            if (state == AirplaneModeStateReader.State.DISABLED) {
+                if (!clearRecoveryRequired()) {
+                    return result.withRestoreVerification(
+                            false,
+                            "Airplane mode is off, but the recovery marker could not be cleared");
+                }
+                return result.withRestoreVerification(
+                        true,
+                        result.isSuccess()
+                                ? result.getMessage()
+                                : result.getMessage() + "; airplane mode is off");
+            }
+            String verificationMessage = state == AirplaneModeStateReader.State.ENABLED
+                    ? "Disable command completed, but Android still reports airplane mode on"
+                    : "Disable command completed, but Android could not verify airplane-mode state";
+            return result.withRestoreVerification(false, verificationMessage);
+        }
+
+        MobileDataStateReader.State state = dataStatePoller.awaitEnabled(
+                RESTORE_VERIFY_TIMEOUT_MILLIS, RESTORE_VERIFY_POLL_MILLIS);
         if (state == MobileDataStateReader.State.ENABLED) {
-            setRecoveryRequired(false);
+            if (!clearRecoveryRequired()) {
+                return result.withRestoreVerification(
+                        false,
+                        "Mobile data is enabled, but the recovery marker could not be cleared");
+            }
             return result.withRestoreVerification(
                     true,
                     result.isSuccess()
@@ -418,13 +502,24 @@ public final class ShizukuMobileDataController implements AutoCloseable {
         return result.withRestoreVerification(false, verificationMessage);
     }
 
-    private MobileDataStateReader.State waitForEnabledState() {
-        return dataStatePoller.awaitEnabled(
-                ENABLE_VERIFY_TIMEOUT_MILLIS, ENABLE_VERIFY_POLL_MILLIS);
+    private RecoveryModePolicy.Mode getRecoveryMode() {
+        String stored = recoveryPreferences.getString(RECOVERY_MODE_KEY, "");
+        return RecoveryModePolicy.fromStored(isRecoveryRequired(), stored);
     }
 
-    private boolean setRecoveryRequired(boolean required) {
-        return recoveryPreferences.edit().putBoolean(RECOVERY_REQUIRED_KEY, required).commit();
+    private boolean setRecoveryRequired(RecoveryModePolicy.Mode mode) {
+        String storedMode = RecoveryModePolicy.storedValue(mode);
+        return recoveryPreferences.edit()
+                .putBoolean(RECOVERY_REQUIRED_KEY, true)
+                .putString(RECOVERY_MODE_KEY, storedMode)
+                .commit();
+    }
+
+    private boolean clearRecoveryRequired() {
+        return recoveryPreferences.edit()
+                .remove(RECOVERY_REQUIRED_KEY)
+                .remove(RECOVERY_MODE_KEY)
+                .commit();
     }
 
     private void handleBinderReceived() {
@@ -465,9 +560,9 @@ public final class ShizukuMobileDataController implements AutoCloseable {
                 publish(State.WAITING_FOR_SHIZUKU, "Start Shizuku first", false, false);
                 return;
             }
-            if (Shizuku.isPreV11()) {
+            if (Shizuku.getVersion() < 13) {
                 resetRebindState();
-                publish(State.UNSUPPORTED, "Shizuku 11 or newer is required", false, false);
+                publish(State.UNSUPPORTED, "Shizuku API 13 or newer is required", false, false);
                 return;
             }
             if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
@@ -476,7 +571,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
                 publish(
                         State.PERMISSION_REQUIRED,
                         rationale
-                                ? "Explain why mobile-data control needs Shizuku access"
+                                ? "Explain why airplane-mode control needs Shizuku access"
                                 : "Allow JustProxy in Shizuku",
                         false,
                         rationale);
@@ -489,12 +584,12 @@ public final class ShizukuMobileDataController implements AutoCloseable {
                 publish(State.UNSUPPORTED, "Unexpected Shizuku server identity", true, false);
                 return;
             }
-            if (Shizuku.checkRemotePermission(Manifest.permission.MODIFY_PHONE_STATE)
+            if (Shizuku.checkRemotePermission(NETWORK_SETTINGS_PERMISSION)
                     != PackageManager.PERMISSION_GRANTED) {
                 resetRebindState();
                 publish(
                         State.UNSUPPORTED,
-                        "This device does not grant mobile-data control to Shizuku",
+                        "This device does not grant airplane-mode control to Shizuku",
                         true,
                         false);
                 return;
@@ -508,19 +603,19 @@ public final class ShizukuMobileDataController implements AutoCloseable {
     private synchronized void bindUserService(int uid) {
         if (!started || closed) return;
         if (remoteService != null) {
-            publish(State.READY, "Mobile-data control is ready", true, false, uid);
+            publish(State.READY, "Airplane-mode control is ready", true, false, uid);
             return;
         }
         if (binding) return;
         binding = true;
-        publish(State.BINDING, "Starting mobile-data UserService", true, false, uid);
+        publish(State.BINDING, "Starting airplane-mode UserService", true, false, uid);
         try {
             Shizuku.bindUserService(userServiceArgs, serviceConnection);
         } catch (RuntimeException exception) {
             binding = false;
             publish(
                     State.BINDING,
-                    safeMessage("Could not bind mobile-data UserService; retrying", exception),
+                    safeMessage("Could not bind airplane-mode UserService; retrying", exception),
                     true,
                     false,
                     uid);
@@ -552,7 +647,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
                 if (availability.getState() != State.ERROR) {
                     publish(
                             State.ERROR,
-                            "Mobile-data UserService reconnect attempts were exhausted",
+                            "Airplane-mode UserService reconnect attempts were exhausted",
                             hasPermissionSafely(),
                             false);
                 }
@@ -573,7 +668,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
             }
             publish(
                     State.ERROR,
-                    "Could not schedule a mobile-data UserService reconnect",
+                    "Could not schedule an airplane-mode UserService reconnect",
                     hasPermissionSafely(),
                     false);
         }
@@ -613,7 +708,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
         if (!started || closed) return;
         String message = exception instanceof DeadObjectException
                 ? "Shizuku connection was lost"
-                : "Mobile-data UserService call failed";
+                : "Airplane-mode UserService call failed";
         if (isBinderAliveSafely()) {
             publish(State.BINDING, message + "; retrying", hasPermissionSafely(), false);
             scheduleRebind();
@@ -678,7 +773,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
         }
         worker.shutdown();
         if (!operationInFlight.get()) detachBindingWithoutRemoval();
-        publish(State.STOPPED, "Shizuku mobile-data control is stopped", false, false, -1);
+        publish(State.STOPPED, "Shizuku airplane-mode control is stopped", false, false, -1);
     }
 
     private synchronized void cleanupBinding() {

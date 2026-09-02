@@ -391,7 +391,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
-                    android:text="Enable automatic mobile-data cycling" />
+                    android:text="Enable automatic airplane-mode rotation" />
 
                 <TextView
                     android:id="@+id/shizukuStatusText"
@@ -407,7 +407,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:text="Optionally turns mobile data off briefly, then restores it. Cellular-only mode and Shizuku permission are required; a new carrier IP is not guaranteed." />
+                    android:text="Briefly cycles airplane mode through Shizuku. Cellular-only mode is required; a new carrier IP is not guaranteed." />
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -448,7 +448,7 @@
                             style="@style/JustProxy.Caption"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="DATA-OFF TIME, SECONDS (1–10)" />
+                            android:text="AIRPLANE-MODE HOLD, SECONDS (1–10)" />
 
                         <EditText
                             android:id="@+id/shizukuDataOffInput"
@@ -466,7 +466,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:text="Default data-off time: 1 second. If Android interrupts recovery, turn mobile data back on manually." />
+                    android:text="Warning: each cycle interrupts cellular calls/texts and may interrupt Wi-Fi. Do not enable the schedule when uninterrupted phone service is needed. Prepare a Pixel once: manually enable airplane mode, turn Wi-Fi back on and reconnect to your router, then disable airplane mode. Automatic rotation through the phone's hotspot is unsupported because the hotspot can stop and may not return. Do not toggle airplane mode manually while rotation/recovery is pending." />
 
                 <LinearLayout
                     android:layout_width="match_parent"
