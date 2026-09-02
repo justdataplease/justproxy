@@ -1,6 +1,6 @@
 # JustProxy Python client
 
-`justproxy-client` 0.3.0b1 is a typed Python 3.9+ client and command-line interface for
+`justproxy-client` 0.3.0b2 is a typed Python 3.9+ client and command-line interface for
 the authenticated JustProxy control API. It uses only the Python standard
 library at runtime (`urllib`, `argparse`, `json`, and `dataclasses`).
 
@@ -24,7 +24,7 @@ python -m pip install ./python
 Or install the bundled v0.3 beta wheel:
 
 ```console
-python -m pip install dist/python/justproxy_client-0.3.0b1-py3-none-any.whl
+python -m pip install dist/python/justproxy_client-0.3.0b2-py3-none-any.whl
 ```
 
 Or directly from the public repository:

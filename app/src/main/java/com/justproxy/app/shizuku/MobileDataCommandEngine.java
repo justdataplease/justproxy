@@ -12,9 +12,9 @@ final class MobileDataCommandEngine {
     static final int MAX_DOWN_TIME_MILLIS = 10_000;
     static final long COMMAND_TIMEOUT_MILLIS = 8_000L;
 
-    private static final List<String> CMD_HELP =
-            List.of("/system/bin/cmd", "phone", "help");
-    private static final List<String> SVC_HELP = List.of("/system/bin/svc", "help");
+    private static final List<String> CMD_DATA_HELP =
+            List.of("/system/bin/cmd", "phone", "data", "help");
+    private static final List<String> SVC_DATA_HELP = List.of("/system/bin/svc", "data");
     private static final List<String> CMD_DISABLE =
             List.of("/system/bin/cmd", "phone", "data", "disable");
     private static final List<String> CMD_ENABLE =
@@ -40,8 +40,8 @@ final class MobileDataCommandEngine {
 
     synchronized MobileDataCommandResult probe() {
         long startedNanos = System.nanoTime();
-        CommandExecution primary = safeExecute(CMD_HELP);
-        String primaryOutput = describe("cmd phone help", primary);
+        CommandExecution primary = safeExecute(CMD_DATA_HELP);
+        String primaryOutput = describe("cmd phone data help", primary);
         if (isCmdPhoneSupported(primary)) {
             return result(
                     MobileDataCommandResult.OPERATION_PROBE,
@@ -56,7 +56,7 @@ final class MobileDataCommandEngine {
                     primaryOutput);
         }
 
-        CommandExecution fallback = safeExecute(SVC_HELP);
+        CommandExecution fallback = safeExecute(SVC_DATA_HELP);
         boolean supported = isSvcDataSupported(fallback);
         return result(
                 MobileDataCommandResult.OPERATION_PROBE,
@@ -72,7 +72,7 @@ final class MobileDataCommandEngine {
                 supported
                         ? "Mobile-data control is available through svc fallback"
                         : "Neither cmd phone data nor svc data was detected",
-                joinOutput(primaryOutput, describe("svc help", fallback)));
+                joinOutput(primaryOutput, describe("svc data", fallback)));
     }
 
     synchronized MobileDataCommandResult cycle(int downTimeMillis) {
@@ -224,15 +224,21 @@ final class MobileDataCommandEngine {
     }
 
     private static boolean isCmdPhoneSupported(CommandExecution execution) {
-        if (!execution.isSuccess()) return false;
+        if (!isCompletedProbe(execution)) return false;
         String output = execution.output.toLowerCase(Locale.ROOT);
         return output.contains("data enable") && output.contains("data disable");
     }
 
     private static boolean isSvcDataSupported(CommandExecution execution) {
-        if (!execution.isSuccess()) return false;
+        if (!isCompletedProbe(execution)) return false;
         String output = execution.output.toLowerCase(Locale.ROOT);
-        return output.contains("data");
+        return output.contains("svc data")
+                && output.contains("enable")
+                && output.contains("disable");
+    }
+
+    private static boolean isCompletedProbe(CommandExecution execution) {
+        return execution.launched && !execution.timedOut && !execution.interrupted;
     }
 
     private static int statusForFailure(CommandExecution execution, int defaultStatus) {

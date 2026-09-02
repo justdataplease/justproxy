@@ -28,7 +28,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
     public static final int MAX_DOWN_TIME_MILLIS = MobileDataCommandEngine.MAX_DOWN_TIME_MILLIS;
 
     private static final int PERMISSION_REQUEST_CODE = 0x4a50;
-    private static final int USER_SERVICE_PROTOCOL_VERSION = 1;
+    private static final int USER_SERVICE_PROTOCOL_VERSION = 2;
     private static final String USER_SERVICE_TAG = "justproxy-mobile-data";
     private static final String RECOVERY_PREFERENCES = "justproxy_mobile_data_recovery";
     private static final String RECOVERY_REQUIRED_KEY = "recovery_required";

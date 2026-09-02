@@ -76,8 +76,8 @@ final class ProcessCommandExecutor implements CommandExecutor {
 
     private static boolean isAllowed(List<String> command) {
         if (command == null) return false;
-        if (command.equals(List.of("/system/bin/cmd", "phone", "help"))) return true;
-        if (command.equals(List.of("/system/bin/svc", "help"))) return true;
+        if (command.equals(List.of("/system/bin/cmd", "phone", "data", "help"))) return true;
+        if (command.equals(List.of("/system/bin/svc", "data"))) return true;
         if (command.size() != 4
                 || !"/system/bin/cmd".equals(command.get(0))
                 || !"phone".equals(command.get(1))

@@ -38,7 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--compact", action="store_true", help="print compact JSON"
     )
-    parser.add_argument("--version", action="version", version="%(prog)s 0.3.0b1")
+    parser.add_argument("--version", action="version", version="%(prog)s 0.3.0b2")
 
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status", help="show service and current-IP status")

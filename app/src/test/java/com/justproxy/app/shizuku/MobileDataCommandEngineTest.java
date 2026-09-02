@@ -13,9 +13,9 @@ import java.util.List;
 
 public final class MobileDataCommandEngineTest {
     @Test
-    public void probeRecognizesCmdPhoneWithoutFallback() {
+    public void probeRecognizesCmdPhoneHelpDespiteNonZeroExit() {
         FakeExecutor executor = new FakeExecutor(CommandExecution.completed(
-                0, "data enable: enable mobile data\ndata disable: disable mobile data"));
+                255, "data enable: enable mobile data\ndata disable: disable mobile data"));
         MobileDataCommandEngine engine = engine(executor, millis -> { });
 
         MobileDataCommandResult result = engine.probe();
@@ -24,7 +24,7 @@ public final class MobileDataCommandEngineTest {
         assertFalse(result.isFallbackUsed());
         assertEquals(2000, result.getServerUid());
         assertEquals(
-                List.of(List.of("/system/bin/cmd", "phone", "help")),
+                List.of(List.of("/system/bin/cmd", "phone", "data", "help")),
                 executor.commands);
     }
 
@@ -32,7 +32,7 @@ public final class MobileDataCommandEngineTest {
     public void probeUsesSvcFallbackWhenCmdPhoneIsUnavailable() {
         FakeExecutor executor = new FakeExecutor(
                 CommandExecution.completed(1, "unknown command"),
-                CommandExecution.completed(0, "Available commands: power data wifi"));
+                CommandExecution.completed(1, "usage: svc data [enable|disable]"));
         MobileDataCommandEngine engine = engine(executor, millis -> { });
 
         MobileDataCommandResult result = engine.probe();
@@ -41,9 +41,42 @@ public final class MobileDataCommandEngineTest {
         assertTrue(result.isFallbackUsed());
         assertEquals(
                 List.of(
-                        List.of("/system/bin/cmd", "phone", "help"),
-                        List.of("/system/bin/svc", "help")),
+                        List.of("/system/bin/cmd", "phone", "data", "help"),
+                        List.of("/system/bin/svc", "data")),
                 executor.commands);
+    }
+
+    @Test
+    public void probeRejectsMarkerlessOutputEvenWhenCommandsExitSuccessfully() {
+        FakeExecutor executor = new FakeExecutor(
+                CommandExecution.completed(0, "Telephony help is unavailable"),
+                CommandExecution.completed(0, "Available commands include data statistics"));
+        MobileDataCommandEngine engine = engine(executor, millis -> { });
+
+        MobileDataCommandResult result = engine.probe();
+
+        assertFalse(result.isSuccess());
+        assertEquals(MobileDataCommandResult.STATUS_UNSUPPORTED, result.getStatus());
+    }
+
+    @Test
+    public void probeRejectsTimedOutCmdHelpBeforeUsingSvcFallback() {
+        FakeExecutor executor = new FakeExecutor(
+                new CommandExecution(
+                        true,
+                        true,
+                        false,
+                        CommandExecution.NO_EXIT_CODE,
+                        8_000L,
+                        "data enable data disable",
+                        ""),
+                CommandExecution.completed(1, "usage: svc data [enable|disable]"));
+        MobileDataCommandEngine engine = engine(executor, millis -> { });
+
+        MobileDataCommandResult result = engine.probe();
+
+        assertTrue(result.isSuccess());
+        assertTrue(result.isFallbackUsed());
     }
 
     @Test
@@ -150,6 +183,22 @@ public final class MobileDataCommandEngineTest {
 
         assertFalse(result.launched);
         assertTrue(result.error.contains("allowlist"));
+    }
+
+    @Test
+    public void processExecutorAllowsOnlyFixedNonMutatingProbeVectors() {
+        ProcessCommandExecutor executor = new ProcessCommandExecutor();
+
+        CommandExecution cmdProbe = executor.execute(
+                List.of("/system/bin/cmd", "phone", "data", "help"), 1_000L);
+        CommandExecution svcProbe = executor.execute(
+                List.of("/system/bin/svc", "data"), 1_000L);
+        CommandExecution extraArgument = executor.execute(
+                List.of("/system/bin/svc", "data", "help"), 1_000L);
+
+        assertFalse(cmdProbe.error.contains("allowlist"));
+        assertFalse(svcProbe.error.contains("allowlist"));
+        assertTrue(extraArgument.error.contains("allowlist"));
     }
 
     private static MobileDataCommandEngine engine(

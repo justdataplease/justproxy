@@ -61,11 +61,11 @@ Legacy proxy traffic follows a separate local HTTP/SOCKS5 listener. HTTPS uses C
 
 ## Downloads
 
-The v0.3.0-beta.1 distribution set is:
+The v0.3.0-beta.2 distribution set is:
 
-- `android/JustProxy-android-0.3.0-beta.1-debug.apk`
-- `python/justproxy_client-0.3.0b1-py3-none-any.whl`
-- `python/justproxy_client-0.3.0b1.tar.gz`
+- `android/JustProxy-android-0.3.0-beta.2-debug.apk`
+- `python/justproxy_client-0.3.0b2-py3-none-any.whl`
+- `python/justproxy_client-0.3.0b2.tar.gz`
 - `SHA256SUMS.txt`
 - [Artifact notes](dist/README.md)
 
@@ -169,7 +169,7 @@ The result should match the public IP shown in JustProxy. With cellular-only ena
 Install the v0.3 beta wheel after it has been published to the distribution folder:
 
 ~~~powershell
-py -m pip install dist/python/justproxy_client-0.3.0b1-py3-none-any.whl
+py -m pip install dist/python/justproxy_client-0.3.0b2-py3-none-any.whl
 ~~~
 
 CLI examples:
@@ -422,7 +422,7 @@ Run this checklist on at least one supported stock Pixel before publishing a v0.
 - Session reconnect, manual mobile-data toggling, and Shizuku mobile-data cycling do not guarantee carrier-IP rotation.
 - Shizuku IP rotation is disabled by default, initially targeted at stock Pixel/Android, requires cellular-only egress, and may be rejected by an OEM or device policy.
 - Non-root Shizuku must be started again after every reboot. If Shizuku or Android fails during the disabled window, mobile data may require manual re-enabling despite JustProxy's finally-path restore and persisted recovery marker.
-- The v0.3.0-beta.1 APK is a beta/debug build, not a Play Store production release.
+- The v0.3.0-beta.2 APK is a beta/debug build, not a Play Store production release.
 - Public-IP checking depends on the external ipify endpoint.
 - Battery optimization and aggressive manufacturer task killers may stop long-running background networking despite the foreground service.
 - JustProxy requests a sticky service restart after an ordinary Android process kill, but Android and

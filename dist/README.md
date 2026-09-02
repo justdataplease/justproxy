@@ -1,11 +1,13 @@
 # JustProxy distribution artifacts
 
-This directory contains the v0.3.0-beta.1 test release:
+This directory contains the v0.3.0-beta.2 test release:
 
-- `android/JustProxy-android-0.3.0-beta.1-debug.apk`: debug-signed Android 8.0+ sideload build with the one-peer WireGuard gateway, optional legacy proxy, and disabled-by-default Shizuku IP-rotation beta.
-- `python/justproxy_client-0.3.0b1-py3-none-any.whl`: Python 3.9+ control API client wheel with `rotate_ip()`.
-- `python/justproxy_client-0.3.0b1.tar.gz`: Python client source distribution, not the complete JustProxy repository source.
+- `android/JustProxy-android-0.3.0-beta.2-debug.apk`: debug-signed Android 8.0+ sideload build with the one-peer WireGuard gateway, optional legacy proxy, and disabled-by-default Shizuku IP-rotation beta.
+- `python/justproxy_client-0.3.0b2-py3-none-any.whl`: Python 3.9+ control API client wheel with `rotate_ip()`.
+- `python/justproxy_client-0.3.0b2.tar.gz`: Python client source distribution, not the complete JustProxy repository source.
 - `SHA256SUMS.txt`: matching SHA-256 digests for all three release artifacts.
+
+Beta.2 fixes false-negative mobile-data command detection on current Pixel/AOSP builds and forces Shizuku to replace the older probe daemon after an APK update.
 
 The custom Windows desktop executable is no longer distributed. Install an official WireGuard client separately from [wireguard.com/install](https://www.wireguard.com/install/), then import the standard `.conf` exported by the Android app. The Python wheel remains the supported scriptable status/control interface.
 
@@ -16,9 +18,9 @@ Shizuku is not included in the APK. Install it only from an [official Shizuku do
 On PowerShell, calculate the APK digest with:
 
 ```powershell
-Get-FileHash .\android\JustProxy-android-0.3.0-beta.1-debug.apk -Algorithm SHA256
+Get-FileHash .\android\JustProxy-android-0.3.0-beta.2-debug.apk -Algorithm SHA256
 ```
 
-Compare the result with the `SHA256SUMS.txt` published in the same v0.3.0-beta.1 release. The exported WireGuard `.conf` is not a public distribution artifact: it contains a client private key and must be transferred and stored securely.
+Compare the result with the `SHA256SUMS.txt` published in the same v0.3.0-beta.2 release. The exported WireGuard `.conf` is not a public distribution artifact: it contains a client private key and must be transferred and stored securely.
 
 See the repository [README](../README.md) for official-client import steps, same-LAN/hotspot requirements, cellular fail-closed behavior, endpoint/firewall limitations, exact Shizuku setup and recovery limitations, separate `/v1/rotate` and `/v1/ip-rotate` actions, Python usage, and the real-Pixel smoke-test checklist.
