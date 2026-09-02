@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "justproxy-client"
-version = "0.2.0b1"
+version = "0.3.0b1"
 description = "Zero-dependency Python client and CLI for the JustProxy control API"
 readme = "README.md"
 requires-python = ">=3.9"

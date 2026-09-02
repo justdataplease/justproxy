@@ -16,9 +16,9 @@
             android:background="@color/navy"
             android:orientation="vertical"
             android:paddingStart="22dp"
-            android:paddingTop="24dp"
+            android:paddingTop="28dp"
             android:paddingEnd="22dp"
-            android:paddingBottom="28dp">
+            android:paddingBottom="32dp">
 
             <TextView
                 android:layout_width="wrap_content"
@@ -51,7 +51,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:padding="20dp">
 
             <LinearLayout
                 style="@style/JustProxy.Card"
@@ -371,6 +371,125 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
                     android:text="View IP &amp; session history" />
+            </LinearLayout>
+
+            <LinearLayout
+                style="@style/JustProxy.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:orientation="vertical">
+
+                <TextView
+                    style="@style/JustProxy.SectionTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Automatic IP rotation - Shizuku" />
+
+                <Switch
+                    android:id="@+id/shizukuRotationSwitch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="Enable automatic mobile-data cycling" />
+
+                <TextView
+                    android:id="@+id/shizukuStatusText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Shizuku setup required"
+                    android:textColor="@color/slate"
+                    android:textSize="14sp" />
+
+                <TextView
+                    style="@style/JustProxy.Caption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Optionally turns mobile data off briefly, then restores it. Cellular-only mode and Shizuku permission are required; a new carrier IP is not guaranteed." />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/JustProxy.Caption"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="INTERVAL, MINUTES (1–1440)" />
+
+                        <EditText
+                            android:id="@+id/shizukuIntervalInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:hint="60"
+                            android:inputType="number"
+                            android:maxLength="4"
+                            android:singleLine="true" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/JustProxy.Caption"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="DATA-OFF TIME, SECONDS (1–10)" />
+
+                        <EditText
+                            android:id="@+id/shizukuDataOffInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="number"
+                            android:maxLength="2"
+                            android:singleLine="true"
+                            android:text="1" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <TextView
+                    style="@style/JustProxy.Caption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Default data-off time: 1 second. If Android interrupts recovery, turn mobile data back on manually." />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/shizukuSetupButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Set up Shizuku" />
+
+                    <Button
+                        android:id="@+id/shizukuRotateNowButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:enabled="false"
+                        android:text="Rotate now" />
+                </LinearLayout>
             </LinearLayout>
 
             <LinearLayout

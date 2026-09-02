@@ -170,6 +170,16 @@ class JustProxyClient:
 
         return self._post_model("/v1/rotate", RotationResult)
 
+    def rotate_ip(self) -> RotationResult:
+        """Request an automatic mobile-data cycle through Shizuku.
+
+        The request is asynchronous and a carrier may assign the same public
+        IP again. Inspect subsequent status and IP-history observations for the
+        completed outcome.
+        """
+
+        return self._post_model("/v1/ip-rotate", RotationResult)
+
     def check_ip(self) -> IPCheckResult:
         """Request a fresh public-IP observation."""
 
@@ -319,7 +329,7 @@ class JustProxyClient:
         headers = {
             "Accept": "application/json",
             "Authorization": "Bearer {0}".format(self.token),
-            "User-Agent": "justproxy-client/0.2.0b1",
+            "User-Agent": "justproxy-client/0.3.0b1",
         }
         if body is not None:
             headers["Content-Type"] = "application/json"

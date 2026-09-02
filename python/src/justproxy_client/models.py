@@ -85,6 +85,42 @@ class WireGuardStatus(JsonModel):
 
 
 @dataclass(frozen=True)
+class IpRotationStatus(JsonModel):
+    """Current automatic carrier-IP rotation configuration and state."""
+
+    enabled: bool = False
+    provider: Optional[str] = None
+    state: Optional[str] = None
+    message: Optional[str] = None
+    interval_minutes: Optional[int] = None
+    data_off_seconds: Optional[int] = None
+    next_at_ms: Optional[int] = None
+    last_attempt_at_ms: Optional[int] = None
+    last_outcome: Optional[str] = None
+    recovery_required: bool = False
+    guarantees_ip_change: bool = False
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "IpRotationStatus":
+        return cls(
+            raw=dict(value),
+            enabled=_bool(value.get("enabled"), False),
+            provider=_optional_str(value.get("provider")),
+            state=_optional_str(value.get("state")),
+            message=_optional_str(value.get("message")),
+            interval_minutes=_optional_int(value.get("interval_minutes")),
+            data_off_seconds=_optional_int(value.get("data_off_seconds")),
+            next_at_ms=_optional_int(value.get("next_at_ms")),
+            last_attempt_at_ms=_optional_int(value.get("last_attempt_at_ms")),
+            last_outcome=_optional_str(value.get("last_outcome")),
+            recovery_required=_bool(value.get("recovery_required"), False),
+            guarantees_ip_change=_bool(
+                value.get("guarantees_ip_change"), False
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class Status(JsonModel):
     version: Optional[str] = None
     state: Optional[str] = None
@@ -99,6 +135,7 @@ class Status(JsonModel):
     next_rotation_at_ms: Optional[int] = None
     rotation_guarantees_ip_change: bool = False
     wireguard: Optional[WireGuardStatus] = None
+    ip_rotation: Optional[IpRotationStatus] = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "Status":
@@ -106,6 +143,12 @@ class Status(JsonModel):
         wireguard = (
             WireGuardStatus.from_dict(wireguard_value)
             if isinstance(wireguard_value, Mapping)
+            else None
+        )
+        ip_rotation_value = value.get("ip_rotation")
+        ip_rotation = (
+            IpRotationStatus.from_dict(ip_rotation_value)
+            if isinstance(ip_rotation_value, Mapping)
             else None
         )
         return cls(
@@ -125,6 +168,7 @@ class Status(JsonModel):
                 value.get("rotation_guarantees_ip_change"), False
             ),
             wireguard=wireguard,
+            ip_rotation=ip_rotation,
         )
 
 

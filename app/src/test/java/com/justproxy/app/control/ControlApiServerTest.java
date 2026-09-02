@@ -1,8 +1,11 @@
 package com.justproxy.app.control;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -22,6 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public final class ControlApiServerTest {
     private final AtomicInteger rotations = new AtomicInteger();
+    private final AtomicInteger ipRotations = new AtomicInteger();
     private ControlApiServer server;
     private String baseUrl;
 
@@ -36,6 +40,24 @@ public final class ControlApiServerTest {
                     @Override public String rotateJson() {
                         rotations.incrementAndGet();
                         return "{rotate:accepted}";
+                    }
+                    @Override public String rotateIpJson() {
+                        ipRotations.incrementAndGet();
+                        try {
+                            return new JSONObject()
+                                    .put("accepted", true)
+                                    .put("action", "mobile_data_cycle_scheduled")
+                                    .put("previous_ip", JSONObject.NULL)
+                                    .put("ip_changed", JSONObject.NULL)
+                                    .put("manual_carrier_reset_required", false)
+                                    .put("reason", JSONObject.NULL)
+                                    .put("data_off_seconds", 1)
+                                    .put("guarantees_ip_change", false)
+                                    .put("message", "Mobile data will cycle and the public IP will be checked")
+                                    .toString();
+                        } catch (JSONException exception) {
+                            throw new AssertionError(exception);
+                        }
                     }
                     @Override public String checkIpJson() { return "{check:accepted}"; }
                 }, message -> {});
@@ -64,6 +86,21 @@ public final class ControlApiServerTest {
         assertEquals(200, rotate.status);
         assertEquals("{rotate:accepted}", rotate.body);
         assertEquals(1, rotations.get());
+
+        Response ipRotate = request("POST", "/v1/ip-rotate", "test-token");
+        assertEquals(200, ipRotate.status);
+        JSONObject ipRotateJson = new JSONObject(ipRotate.body);
+        assertTrue(ipRotateJson.getBoolean("accepted"));
+        assertEquals("mobile_data_cycle_scheduled", ipRotateJson.getString("action"));
+        assertTrue(ipRotateJson.isNull("previous_ip"));
+        assertTrue(ipRotateJson.isNull("ip_changed"));
+        assertFalse(ipRotateJson.getBoolean("manual_carrier_reset_required"));
+        assertTrue(ipRotateJson.isNull("reason"));
+        assertEquals(1, ipRotateJson.getInt("data_off_seconds"));
+        assertFalse(ipRotateJson.getBoolean("guarantees_ip_change"));
+        assertEquals("Mobile data will cycle and the public IP will be checked",
+                ipRotateJson.getString("message"));
+        assertEquals(1, ipRotations.get());
     }
 
     @Test

@@ -8,6 +8,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -20,6 +21,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.justproxy.app.wireguard.WireGuardPeersActivity;
+import com.justproxy.app.shizuku.MobileDataCommandResult;
+import com.justproxy.app.shizuku.ShizukuMobileDataController;
 
 import java.util.List;
 
@@ -48,21 +51,29 @@ public final class MainActivity extends Activity {
     private TextView wireGuardStatusText;
     private TextView wireGuardEndpointText;
     private TextView wireGuardTrafficText;
+    private TextView shizukuStatusText;
     private Button startStopButton;
     private Button rotateButton;
     private Button refreshIpButton;
     private Button regenerateButton;
+    private Button shizukuSetupButton;
+    private Button shizukuRotateNowButton;
     private Switch lanAccessSwitch;
     private Switch cellularOnlySwitch;
     private Switch privateDestinationsSwitch;
     private Switch wireGuardEnabledSwitch;
     private Switch legacyProxyEnabledSwitch;
+    private Switch shizukuRotationSwitch;
     private EditText portInput;
     private EditText wireGuardPortInput;
     private EditText rotationInput;
     private EditText idleInput;
     private EditText maxConnectionsInput;
     private EditText dataCapInput;
+    private EditText shizukuIntervalInput;
+    private EditText shizukuDataOffInput;
+    private ShizukuMobileDataController mobileDataController;
+    private ShizukuMobileDataController.Availability mobileDataAvailability;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,6 +83,13 @@ public final class MainActivity extends Activity {
         bindViews();
         loadSettings();
         installActions();
+        mobileDataController = new ShizukuMobileDataController(this,
+                availability -> {
+                    mobileDataAvailability = availability;
+                    renderStatus(ProxyService.getStatus());
+                });
+        mobileDataAvailability = mobileDataController.getAvailability();
+        mobileDataController.start();
         requestNotificationPermission();
         if (!settings.hasAcceptedSafetyNotice()) showSafetyNotice(null);
     }
@@ -92,21 +110,27 @@ public final class MainActivity extends Activity {
         wireGuardStatusText = findViewById(R.id.wireGuardStatusText);
         wireGuardEndpointText = findViewById(R.id.wireGuardEndpointText);
         wireGuardTrafficText = findViewById(R.id.wireGuardTrafficText);
+        shizukuStatusText = findViewById(R.id.shizukuStatusText);
         startStopButton = findViewById(R.id.startStopButton);
         rotateButton = findViewById(R.id.rotateButton);
         refreshIpButton = findViewById(R.id.refreshIpButton);
         regenerateButton = findViewById(R.id.regenerateButton);
+        shizukuSetupButton = findViewById(R.id.shizukuSetupButton);
+        shizukuRotateNowButton = findViewById(R.id.shizukuRotateNowButton);
         lanAccessSwitch = findViewById(R.id.lanAccessSwitch);
         cellularOnlySwitch = findViewById(R.id.cellularOnlySwitch);
         privateDestinationsSwitch = findViewById(R.id.privateDestinationsSwitch);
         wireGuardEnabledSwitch = findViewById(R.id.wireGuardEnabledSwitch);
         legacyProxyEnabledSwitch = findViewById(R.id.legacyProxyEnabledSwitch);
+        shizukuRotationSwitch = findViewById(R.id.shizukuRotationSwitch);
         portInput = findViewById(R.id.portInput);
         wireGuardPortInput = findViewById(R.id.wireGuardPortInput);
         rotationInput = findViewById(R.id.rotationInput);
         idleInput = findViewById(R.id.idleInput);
         maxConnectionsInput = findViewById(R.id.maxConnectionsInput);
         dataCapInput = findViewById(R.id.dataCapInput);
+        shizukuIntervalInput = findViewById(R.id.shizukuIntervalInput);
+        shizukuDataOffInput = findViewById(R.id.shizukuDataOffInput);
     }
 
     private void loadSettings() {
@@ -115,12 +139,17 @@ public final class MainActivity extends Activity {
         privateDestinationsSwitch.setChecked(settings.isPrivateDestinationAccessEnabled());
         wireGuardEnabledSwitch.setChecked(settings.isWireGuardEnabled());
         legacyProxyEnabledSwitch.setChecked(settings.isLegacyProxyEnabled());
+        shizukuRotationSwitch.setChecked(settings.isShizukuIpRotationEnabled());
         portInput.setText(String.valueOf(settings.getPort()));
         wireGuardPortInput.setText(String.valueOf(settings.getWireGuardPort()));
         rotationInput.setText(String.valueOf(settings.getRotationMinutes()));
         idleInput.setText(String.valueOf(settings.getIdleTimeoutSeconds()));
         maxConnectionsInput.setText(String.valueOf(settings.getMaxConnections()));
         dataCapInput.setText(String.valueOf(settings.getDataCapMiB()));
+        shizukuIntervalInput.setText(String.valueOf(
+                settings.getShizukuIpRotationIntervalMinutes()));
+        shizukuDataOffInput.setText(String.valueOf(
+                settings.getShizukuDataOffSeconds()));
         renderCredentials();
         renderEndpoints();
         renderWireGuardEndpoint();
@@ -145,6 +174,18 @@ public final class MainActivity extends Activity {
                 .show());
         refreshIpButton.setOnClickListener(view ->
                 sendCommand(ProxyService.ACTION_REFRESH_IP, false));
+        shizukuSetupButton.setOnClickListener(view -> handleShizukuSetup());
+        shizukuRotateNowButton.setOnClickListener(view ->
+                new AlertDialog.Builder(this)
+                        .setTitle("Rotate the carrier IP now?")
+                        .setMessage("JustProxy will turn mobile data off for "
+                                + parseOrDefault(shizukuDataOffInput,
+                                settings.getShizukuDataOffSeconds())
+                                + " second(s), restore it, reconnect the gateway, and check the real public IP. The carrier may return the same IP.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Rotate IP", (dialog, which) ->
+                                sendCommand(ProxyService.ACTION_ROTATE_IP, false))
+                        .show());
         findViewById(R.id.copyButton).setOnClickListener(view -> copySetup());
         regenerateButton.setOnClickListener(view -> new AlertDialog.Builder(this)
                 .setTitle("Generate a new secret?")
@@ -201,11 +242,18 @@ public final class MainActivity extends Activity {
         int idle = number(idleInput, "Idle timeout");
         int max = number(maxConnectionsInput, "Maximum connections");
         long cap = longNumber(dataCapInput, "Data cap");
+        int shizukuInterval = number(
+                shizukuIntervalInput, "Automatic IP rotation interval");
+        int shizukuDataOff = number(
+                shizukuDataOffInput, "Mobile-data off time");
         requireRange(port, 1024, 65534, "Proxy port");
         requireRange(wireGuardPort, 1024, 65535, "WireGuard port");
         requireRange(rotation, 0, 1440, "Reconnect interval");
         requireRange(idle, 10, 3600, "Idle timeout");
         requireRange(max, 1, 64, "Maximum connections");
+        requireRange(shizukuInterval, 1, 1440,
+                "Automatic IP rotation interval");
+        requireRange(shizukuDataOff, 1, 10, "Mobile-data off time");
         if (cap < 0 || cap > 1_048_576L) {
             throw new IllegalArgumentException("Data cap must be 0 to 1048576 MiB");
         }
@@ -218,11 +266,20 @@ public final class MainActivity extends Activity {
             throw new IllegalArgumentException(
                     "WireGuard port must differ from the proxy and control ports");
         }
+        if (shizukuRotationSwitch.isChecked()
+                && !cellularOnlySwitch.isChecked()) {
+            throw new IllegalArgumentException(
+                    "Automatic IP rotation requires cellular-only egress");
+        }
         settings.setPort(port);
         settings.setWireGuardPort(wireGuardPort);
         settings.setWireGuardEnabled(wireGuardEnabledSwitch.isChecked());
         settings.setLegacyProxyEnabled(legacyProxyEnabledSwitch.isChecked());
         settings.setRotationMinutes(rotation);
+        settings.setShizukuIpRotationEnabled(
+                shizukuRotationSwitch.isChecked());
+        settings.setShizukuIpRotationIntervalMinutes(shizukuInterval);
+        settings.setShizukuDataOffSeconds(shizukuDataOff);
         settings.setIdleTimeoutSeconds(idle);
         settings.setMaxConnections(max);
         settings.setDataCapMiB(cap);
@@ -323,7 +380,53 @@ public final class MainActivity extends Activity {
                 + "  |  Down " + ByteFormatter.format(status.lifetimeDownloadedBytes)
                 + "  |  " + status.lifetimeSessions + " sessions"
                 + "  |  " + status.ipChangeCount + " IP changes");
+        renderShizukuStatus(status);
         setConfigurationEnabled(!status.isActive());
+    }
+
+    private void renderShizukuStatus(ProxyStatus status) {
+        boolean recoveryRequired = mobileDataController != null
+                && mobileDataController.isRecoveryRequired();
+        String message;
+        if (recoveryRequired) {
+            message = status.isActive()
+                    ? status.ipRotation.message
+                    : "Mobile data may be off. Restore it now or turn it on manually.";
+        } else if (status.isActive()) {
+            message = status.ipRotation.message;
+        } else if (mobileDataAvailability != null) {
+            message = mobileDataAvailability.getMessage();
+        } else {
+            message = "Checking Shizuku";
+        }
+        shizukuStatusText.setText(message);
+
+        boolean ready = mobileDataAvailability != null
+                && mobileDataAvailability.isReady();
+        boolean idle = status.ipRotation.state == IpRotationStatus.State.READY
+                || status.ipRotation.state == IpRotationStatus.State.DISABLED
+                || status.ipRotation.state == IpRotationStatus.State.ERROR;
+        shizukuRotateNowButton.setEnabled(
+                status.state == ProxyStatus.State.RUNNING
+                        && settings.isCellularOnly()
+                        && ready && idle && !recoveryRequired);
+
+        if (recoveryRequired) {
+            shizukuSetupButton.setText(status.isActive()
+                    && status.ipRotation.state != IpRotationStatus.State.ERROR
+                    ? "Recovery in progress" : "Retry recovery");
+        } else if (ready) {
+            shizukuSetupButton.setText("Test Shizuku");
+        } else if (mobileDataAvailability != null
+                && (mobileDataAvailability.getState()
+                        == ShizukuMobileDataController.State.PERMISSION_REQUIRED
+                || mobileDataAvailability.getState()
+                        == ShizukuMobileDataController.State.PERMISSION_DENIED)) {
+            shizukuSetupButton.setText("Allow JustProxy");
+        } else {
+            shizukuSetupButton.setText("Set up Shizuku");
+        }
+        shizukuSetupButton.setEnabled(true);
     }
 
     private void setConfigurationEnabled(boolean enabled) {
@@ -338,7 +441,126 @@ public final class MainActivity extends Activity {
         idleInput.setEnabled(enabled);
         maxConnectionsInput.setEnabled(enabled);
         dataCapInput.setEnabled(enabled);
+        shizukuRotationSwitch.setEnabled(enabled);
+        shizukuIntervalInput.setEnabled(enabled);
+        shizukuDataOffInput.setEnabled(enabled);
         regenerateButton.setEnabled(true);
+    }
+
+    private void handleShizukuSetup() {
+        if (mobileDataController == null) return;
+        ProxyStatus status = ProxyService.getStatus();
+        if (mobileDataController.isRecoveryRequired()) {
+            if (status.isActive()) {
+                Toast.makeText(this,
+                        "Retrying mobile-data recovery",
+                        Toast.LENGTH_LONG).show();
+                sendCommand(ProxyService.ACTION_RECOVER_MOBILE_DATA, false);
+            } else if (mobileDataController.getAvailability().isReady()) {
+                runShizukuOperation(true);
+            } else {
+                reconcileManualMobileDataRecovery();
+            }
+            return;
+        }
+        ShizukuMobileDataController.Availability availability =
+                mobileDataController.getAvailability();
+        if (availability.isReady()) {
+            runShizukuOperation(false);
+            return;
+        }
+        if (availability.getState()
+                == ShizukuMobileDataController.State.PERMISSION_REQUIRED
+                || availability.getState()
+                == ShizukuMobileDataController.State.PERMISSION_DENIED) {
+            if (availability.getState()
+                    == ShizukuMobileDataController.State.PERMISSION_REQUIRED
+                    && !availability.shouldShowPermissionRationale()) {
+                mobileDataController.requestPermission();
+            } else {
+                new AlertDialog.Builder(this)
+                        .setTitle("Allow JustProxy in Shizuku")
+                        .setMessage("JustProxy uses Shizuku only for the fixed mobile-data enable/disable commands needed by Rotate IP. It cannot run arbitrary commands. You can leave automatic rotation disabled and keep using WireGuard normally.")
+                        .setNegativeButton("Cancel", null)
+                        .setNeutralButton("Setup guide", (dialog, which) ->
+                                startActivity(new Intent(Intent.ACTION_VIEW,
+                                        Uri.parse("https://shizuku.rikka.app/guide/setup/"))))
+                        .setPositiveButton("Request again", (dialog, which) ->
+                                mobileDataController.requestPermission())
+                        .show();
+            }
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Set up Shizuku")
+                .setMessage("Install and start Shizuku using Wireless debugging, then return here and tap Retry. JustProxy will ask for permission; root is not required.")
+                .setNegativeButton("Cancel", null)
+                .setNeutralButton("Retry", (dialog, which) ->
+                        mobileDataController.requestPermission())
+                .setPositiveButton("Open setup guide", (dialog, which) ->
+                        startActivity(new Intent(Intent.ACTION_VIEW,
+                                Uri.parse("https://shizuku.rikka.app/guide/setup/"))))
+                .show();
+    }
+
+    private void runShizukuOperation(boolean restore) {
+        ShizukuMobileDataController.OperationCallback callback =
+                new ShizukuMobileDataController.OperationCallback() {
+                    @Override public void onResult(MobileDataCommandResult result) {
+                        Toast.makeText(MainActivity.this, result.getMessage(),
+                                result.isSuccess()
+                                        ? Toast.LENGTH_SHORT : Toast.LENGTH_LONG).show();
+                        renderStatus(ProxyService.getStatus());
+                    }
+
+                    @Override public void onUnavailable(
+                            ShizukuMobileDataController.Availability availability) {
+                        mobileDataAvailability = availability;
+                        Toast.makeText(MainActivity.this,
+                                availability.getMessage(), Toast.LENGTH_LONG).show();
+                        renderStatus(ProxyService.getStatus());
+                    }
+
+                    @Override public void onError(Throwable error) {
+                        String message = error.getMessage();
+                        Toast.makeText(MainActivity.this,
+                                message == null ? "Shizuku operation failed" : message,
+                                Toast.LENGTH_LONG).show();
+                        renderStatus(ProxyService.getStatus());
+                    }
+                };
+        if (restore) {
+            mobileDataController.restoreAsync(callback);
+        } else {
+            mobileDataController.probeAsync(callback);
+        }
+    }
+
+    private void reconcileManualMobileDataRecovery() {
+        mobileDataController.reconcileRecoveryAsync(
+                new ShizukuMobileDataController.OperationCallback() {
+                    @Override public void onResult(MobileDataCommandResult result) {
+                        Toast.makeText(MainActivity.this, result.getMessage(),
+                                Toast.LENGTH_SHORT).show();
+                        renderStatus(ProxyService.getStatus());
+                    }
+
+                    @Override public void onUnavailable(
+                            ShizukuMobileDataController.Availability availability) {
+                        Toast.makeText(MainActivity.this,
+                                availability.getMessage(), Toast.LENGTH_LONG).show();
+                    }
+
+                    @Override public void onError(Throwable error) {
+                        String message = error.getMessage();
+                        Toast.makeText(MainActivity.this,
+                                message == null
+                                        ? "Turn mobile data on, then retry recovery"
+                                        : message,
+                                Toast.LENGTH_LONG).show();
+                        renderStatus(ProxyService.getStatus());
+                    }
+                });
     }
 
     private void copySetup() {
@@ -461,5 +683,10 @@ public final class MainActivity extends Activity {
     @Override protected void onPause() {
         ticker.removeCallbacks(refreshTask);
         super.onPause();
+    }
+
+    @Override protected void onDestroy() {
+        if (mobileDataController != null) mobileDataController.close();
+        super.onDestroy();
     }
 }

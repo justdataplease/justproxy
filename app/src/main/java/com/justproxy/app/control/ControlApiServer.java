@@ -31,6 +31,7 @@ public final class ControlApiServer implements AutoCloseable {
         String ipHistoryJson();
         String sessionsJson();
         String rotateJson();
+        String rotateIpJson();
         String checkIpJson();
     }
 
@@ -167,6 +168,8 @@ public final class ControlApiServer implements AutoCloseable {
                 response = handler.sessionsJson();
             } else if ("POST".equals(request.method) && "/v1/rotate".equals(request.path)) {
                 response = handler.rotateJson();
+            } else if ("POST".equals(request.method) && "/v1/ip-rotate".equals(request.path)) {
+                response = handler.rotateIpJson();
             } else if ("POST".equals(request.method) && "/v1/check-ip".equals(request.path)) {
                 response = handler.checkIpJson();
             } else {

@@ -33,19 +33,22 @@ jobs:
       - run: |
           chmod +x gradlew
           ./gradlew testDebugUnitTest assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk JustProxy-android-debug.apk
+          version="${GITHUB_REF_NAME#v}"
+          cp app/build/outputs/apk/debug/app-debug.apk "JustProxy-android-${version}-debug.apk"
       - name: Verify APK packaging
         run: |
           set -euo pipefail
           build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-          badging="$($build_tools/aapt dump badging JustProxy-android-debug.apk)"
+          apk="$(find . -maxdepth 1 -name 'JustProxy-android-*-debug.apk' -print -quit)"
+          test -n "$apk"
+          badging="$($build_tools/aapt dump badging "$apk")"
           native_code="$(printf '%s\n' "$badging" | grep -F "native-code:")"
           for abi in arm64-v8a armeabi-v7a x86_64; do
             grep -Fq "'$abi'" <<< "$native_code"
           done
-          "$build_tools/zipalign" -c -P 16 -v 4 JustProxy-android-debug.apk
-          "$build_tools/apksigner" verify --verbose JustProxy-android-debug.apk
-          apk_entries="$(unzip -Z1 JustProxy-android-debug.apk)"
+          "$build_tools/zipalign" -c -P 16 -v 4 "$apk"
+          "$build_tools/apksigner" verify --verbose "$apk"
+          apk_entries="$(unzip -Z1 "$apk")"
           if grep -Fq 'libboringtun-' <<< "$apk_entries"; then
             echo "Unexpected standalone BoringTun library in APK" >&2
             exit 1
@@ -53,7 +56,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: android-release
-          path: JustProxy-android-debug.apk
+          path: JustProxy-android-*-debug.apk
 
   python:
     runs-on: ubuntu-latest

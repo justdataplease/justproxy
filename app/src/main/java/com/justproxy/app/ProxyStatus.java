@@ -23,6 +23,7 @@ public final class ProxyStatus {
     public final long startedAtMillis;
     public final long nextRotationAtMillis;
     public final WireGuardGatewayStatus wireGuard;
+    public final IpRotationStatus ipRotation;
 
     public ProxyStatus(State state, String message, String listenAddress, int port,
                        String egress, String publicIp, long runUploadedBytes,
@@ -30,7 +31,8 @@ public final class ProxyStatus {
                        long todayDownloadedBytes, long lifetimeUploadedBytes,
                        long lifetimeDownloadedBytes, int activeConnections,
                        long lifetimeSessions, long ipChangeCount, long startedAtMillis,
-                       long nextRotationAtMillis, WireGuardGatewayStatus wireGuard) {
+                       long nextRotationAtMillis, WireGuardGatewayStatus wireGuard,
+                       IpRotationStatus ipRotation) {
         this.state = state;
         this.message = valueOrDash(message);
         this.listenAddress = valueOrDash(listenAddress);
@@ -50,12 +52,20 @@ public final class ProxyStatus {
         this.nextRotationAtMillis = nextRotationAtMillis;
         this.wireGuard = wireGuard == null
                 ? WireGuardGatewayStatus.disabled() : wireGuard;
+        this.ipRotation = ipRotation == null
+                ? IpRotationStatus.disabled(
+                        AppSettings.DEFAULT_SHIZUKU_ROTATION_INTERVAL_MINUTES,
+                        AppSettings.DEFAULT_SHIZUKU_DATA_OFF_SECONDS)
+                : ipRotation;
     }
 
     public static ProxyStatus stopped() {
         return new ProxyStatus(State.STOPPED, "Proxy is off", "-", 0, "-", "-",
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                WireGuardGatewayStatus.disabled());
+                WireGuardGatewayStatus.disabled(),
+                IpRotationStatus.disabled(
+                        AppSettings.DEFAULT_SHIZUKU_ROTATION_INTERVAL_MINUTES,
+                        AppSettings.DEFAULT_SHIZUKU_DATA_OFF_SECONDS));
     }
 
     public boolean isActive() {

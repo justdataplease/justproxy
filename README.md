@@ -1,14 +1,14 @@
 # JustProxy
 
-JustProxy v0.2 turns an unrooted Android phone into a local WireGuard Internet gateway. Export a standard `.conf` file from the phone, import it into the official WireGuard client on a computer or another mobile device, and route that device's IPv4 and IPv6 TCP/UDP traffic through the phone's selected Android network. The existing authenticated HTTP/HTTPS CONNECT and SOCKS5 proxy remains available as an optional compatibility mode.
+JustProxy v0.3 beta turns an unrooted Android phone into a local WireGuard Internet gateway. Export a standard `.conf` file from the phone, import it into the official WireGuard client on a computer or another mobile device, and route that device's IPv4 and IPv6 TCP/UDP traffic through the phone's selected Android network. The existing authenticated HTTP/HTTPS CONNECT and SOCKS5 proxy remains available as an optional compatibility mode. An opt-in Shizuku integration can also cycle mobile data on supported phones in an attempt to request a new carrier IP.
 
-> Beta distribution: the Android APK is debug-signed and the Python package is pre-1.0. The WireGuard gateway is a one-peer beta. These artifacts are for testing, not a production or app-store release.
+> Beta distribution: the Android APK is debug-signed and the Python package is pre-1.0. The WireGuard gateway is a one-peer beta, and Shizuku IP rotation is an experimental, disabled-by-default feature. These builds are for testing, not a production or app-store release.
 
 ## What is included
 
 | Component | Purpose |
 | --- | --- |
-| Android app | Runs the userspace WireGuard gateway, optional legacy proxy, cellular routing, profile export, and local traffic/IP analytics |
+| Android app | Runs the userspace WireGuard gateway, optional legacy proxy, cellular routing, profile export, local traffic/IP analytics, and optional Shizuku IP rotation |
 | WireGuard client profile | Standard dual-stack full-tunnel `.conf` imported into an official WireGuard client |
 | Python package and CLI | Scriptable authenticated control API client and legacy proxy helpers |
 | Distribution folder | Test APK, Python wheel/source archive, and checksums |
@@ -43,7 +43,7 @@ Legacy proxy traffic follows a separate local HTTP/SOCKS5 listener. HTTPS uses C
 
 - Standard WireGuard `.conf` export for official Windows, macOS, Linux, Android, and iOS clients.
 - Full-tunnel `0.0.0.0/0` and `::/0` routes with IPv4/IPv6 TCP and UDP forwarding.
-- One authenticated WireGuard peer in the v0.2 beta.
+- One authenticated WireGuard peer in the v0.3 beta.
 - Userspace gateway on an unrooted phone; it does not use Android `VpnService`.
 - Cellular-only fail-closed routing for WireGuard, DNS, and legacy proxy destinations.
 - WireGuard active/total flow counts, byte estimates, and latest handshake status.
@@ -51,6 +51,8 @@ Legacy proxy traffic follows a separate local HTTP/SOCKS5 listener. HTTPS uses C
 - Live run, today, and lifetime upload/download totals plus a combined run data cap.
 - Android-Keystore-encrypted WireGuard and proxy credentials.
 - Manual reconnect of proxy sessions and WireGuard flows.
+- Optional non-root Shizuku mobile-data cycling on supported stock Android devices.
+- Separate scheduled session reconnect and privileged IP-rotation controls.
 - Optional authenticated HTTP/HTTPS CONNECT and SOCKS5 proxy.
 - Loopback-only USB proxy mode and opt-in hotspot/LAN proxy listener.
 - Authenticated local JSON control API.
@@ -59,14 +61,17 @@ Legacy proxy traffic follows a separate local HTTP/SOCKS5 listener. HTTPS uses C
 
 ## Downloads
 
-The repository distribution directory contains:
+The v0.3.0-beta.1 distribution set is:
 
-- [Android APK](dist/android/JustProxy-android-debug.apk)
-- [Python packages](dist/python/)
-- [SHA-256 checksums](dist/SHA256SUMS.txt)
+- `android/JustProxy-android-0.3.0-beta.1-debug.apk`
+- `python/justproxy_client-0.3.0b1-py3-none-any.whl`
+- `python/justproxy_client-0.3.0b1.tar.gz`
+- `SHA256SUMS.txt`
 - [Artifact notes](dist/README.md)
 
-GitHub Releases carries the same files. Android may warn because the APK uses a debug signing key. A beta APK produced by a different build runner may have a different debug-signing identity; if Android rejects an update, uninstall the old test build before installing the new one. Uninstalling clears JustProxy settings, analytics, credentials, and its stored peer, so export anything you need first. Verify the SHA-256 checksums before installing downloaded artifacts. Install an official WireGuard client separately from the [WireGuard installation page](https://www.wireguard.com/install/).
+The repository includes all three versioned artifacts and their matching checksums. GitHub Releases publishes the same distribution set for each tagged release.
+
+GitHub Releases carries published release files. Android may warn because the APK uses a debug signing key. A beta APK produced by a different build runner may have a different debug-signing identity; if Android rejects an update, uninstall the old test build before installing the new one. Uninstalling clears JustProxy settings, analytics, credentials, and its stored peer, so export anything you need first. Verify the matching release's SHA-256 checksums before installing downloaded artifacts. Install an official WireGuard client separately from the [WireGuard installation page](https://www.wireguard.com/install/).
 
 ## Quick start: WireGuard
 
@@ -82,7 +87,7 @@ The phone and client must be locally reachable over the same Wi-Fi LAN or the ph
 8. Return to the main screen, enable **WireGuard gateway (full computer traffic)**, keep **Cellular-only egress (fail closed)** enabled, and tap **Start JustProxy**.
 9. Transfer the exported file securely to the client, import it into WireGuard, and activate the tunnel.
 
-The v0.2 beta accepts exactly one peer identity. Regenerating or revoking it immediately invalidates the old configuration after the gateway reloads. Do not run the same exported profile on multiple devices at the same time: they share one private key and inner address.
+The v0.3 beta accepts exactly one peer identity. Regenerating or revoking it immediately invalidates the old configuration after the gateway reloads. Do not run the same exported profile on multiple devices at the same time: they share one private key and inner address.
 
 ### Import the profile
 
@@ -101,7 +106,7 @@ The exported profile records the selected phone address and UDP port as a static
 - A phone hotspot normally provides the simplest direct local path.
 - On Wi-Fi, both devices must be on the same reachable LAN; a guest network, client/AP isolation, VLAN rules, or a local firewall may block device-to-device UDP.
 - If the phone's LAN address or WireGuard port changes, re-export the profile or edit its `Endpoint` in the WireGuard client.
-- JustProxy v0.2 does not provide NAT traversal, dynamic endpoint discovery, or a public relay.
+- JustProxy v0.3 does not provide NAT traversal, dynamic endpoint discovery, or a public relay.
 - Carrier CGNAT and mobile firewalls normally prevent an Internet client from initiating a connection to the phone. Direct remote use is not supported.
 - Do not expose the gateway or control port through public router port forwarding.
 
@@ -161,10 +166,10 @@ The result should match the public IP shown in JustProxy. With cellular-only ena
 
 ## Python API and CLI
 
-Install the bundled wheel:
+Install the v0.3 beta wheel after it has been published to the distribution folder:
 
 ~~~powershell
-py -m pip install dist\python\justproxy_client-0.2.0b1-py3-none-any.whl
+py -m pip install dist/python/justproxy_client-0.3.0b1-py3-none-any.whl
 ~~~
 
 CLI examples:
@@ -174,6 +179,7 @@ justproxy --token PASSWORD status
 justproxy --token PASSWORD metrics
 justproxy --token PASSWORD check-ip
 justproxy --token PASSWORD rotate
+justproxy --token PASSWORD rotate-ip
 justproxy --token PASSWORD ip-history
 justproxy --token PASSWORD sessions
 justproxy --token PASSWORD env --username USERNAME --password PASSWORD --proxy-port 8282
@@ -196,8 +202,10 @@ client = JustProxyClient(
 
 print(client.status())
 print(client.metrics())
-result = client.rotate()
-print(result)
+reconnect = client.rotate()       # POST /v1/rotate: sessions only
+ip_rotation = client.rotate_ip() # POST /v1/ip-rotate: Shizuku mobile-data cycle
+print(reconnect)
+print(ip_rotation)
 print(client.requests_proxies(
     host="127.0.0.1",
     proxy_port=8282,
@@ -206,21 +214,59 @@ print(client.requests_proxies(
 
 Proxy URL and environment helpers require authentication. Configure `proxy_username` on the client (as above) or pass a username to each helper; when a username is configured, `proxy_password` defaults to the control token if it is omitted. These helpers remain supported for the legacy proxy.
 
-Newer API responses expose a typed `status.wireguard` object and WireGuard upload, download, active-flow, and total-flow metrics. Older phones that omit those fields remain compatible; the SDK preserves unknown fields in each model's `raw` mapping. The package uses only the Python standard library at runtime. See [python/README.md](python/README.md) for the full SDK and CLI reference.
+Newer API responses expose typed `status.wireguard` and `status.ip_rotation` objects plus WireGuard upload, download, active-flow, and total-flow metrics. `rotate_ip()` is accepted only when JustProxy is running, cellular-only egress is enabled, Shizuku is ready, and no cycle or recovery is active. Older phones that omit newer fields remain compatible; the SDK preserves unknown fields in each model's `raw` mapping. The package uses only the Python standard library at runtime. See [python/README.md](python/README.md) for the full SDK and CLI reference.
 
-## Reconnect and carrier IP changes
+## Reconnect sessions vs rotate the carrier IP
 
-**Reconnect** closes active legacy proxy sessions, restarts WireGuard forwarding flows, and performs a fresh public-IP check. Scheduled reconnect uses the same principle. It does not toggle the cellular radio and does not guarantee a different carrier IP.
+JustProxy v0.3 deliberately keeps these actions separate:
 
-A normal unrooted third-party Android app cannot toggle airplane mode or mobile data programmatically. To request a new carrier lease:
+| Goal | Android control | Control API | Python |
+| --- | --- | --- | --- |
+| Reconnect active flows without touching mobile data | **Reconnect** | `POST /v1/rotate` | `client.rotate()` / `justproxy rotate` |
+| Ask the carrier for another lease by cycling mobile data | **Rotate now** in the Shizuku card | `POST /v1/ip-rotate` | `client.rotate_ip()` / `justproxy rotate-ip` |
+
+**Reconnect** closes active legacy-proxy sessions, restarts WireGuard forwarding flows, and schedules a public-IP check. Its existing 0-to-1440-minute schedule remains independent of automatic IP rotation. It does not toggle mobile data.
+
+**Automatic IP rotation (Shizuku)** is an optional v0.3 beta. When it is ready, JustProxy stops its data planes, asks the Shizuku UserService to disable mobile data briefly, attempts to enable it again, waits for Android to report data enabled and for a fresh cellular `Network`, restarts forwarding, and checks the public IP. The request is asynchronous: an accepted `/v1/ip-rotate` response means that work was scheduled, not that the IP changed. Read `status.ip_rotation.last_outcome` and the IP history for the verified result.
+
+### Set up Shizuku on a stock Pixel without root
+
+Shizuku is a separate application and is not bundled with JustProxy. Use only an official [Shizuku download](https://shizuku.rikka.app/download/) and follow its [wireless-debugging user guide](https://shizuku.rikka.app/guide/setup/). Android 11 or newer can start Shizuku through wireless debugging without a computer after pairing; due to Android limitations, the start step must be repeated after every phone reboot.
+
+1. Install Shizuku from an official source and open it.
+2. On a Pixel, open **Settings > About phone** and tap **Build number** seven times to enable Developer options.
+3. Open **Settings > System > Developer options**. Enable **USB debugging**, then open and enable **Wireless debugging**. Perform pairing while the phone is connected to a trusted Wi-Fi network.
+4. In Shizuku choose **Start via Wireless debugging** and start pairing.
+5. In Android's **Wireless debugging** screen, tap **Pair device with pairing code**. Enter the displayed pairing code through the Shizuku notification, return to Shizuku, and tap **Start**. Pairing is normally needed once; starting is needed again after each reboot.
+6. Open JustProxy and tap **Set up Shizuku** in **Automatic IP rotation - Shizuku**. Approve JustProxy when Shizuku displays its access prompt. Shizuku 11 or newer is required.
+7. Keep **Cellular-only egress (fail closed)** enabled. Turn on automatic IP rotation, choose an interval from **1 to 1440 minutes**, and choose a mobile-data-off time from **1 to 10 seconds**. The default and recommended first test is **1 second**.
+8. Start JustProxy and wait for the Shizuku status to say it is ready. Tap **Rotate now** once and confirm that mobile data returns, cellular forwarding resumes, and the IP result becomes **changed**, **unchanged**, or **failed**.
+
+After a reboot, start Shizuku again before expecting scheduled rotations. If Shizuku is stopped, permission is denied, the device rejects the telephony command, or cellular-only mode is off, JustProxy does not start an automatic data cycle. Pixel/stock Android is the initial compatibility target; modified OEM telephony stacks may not support the command even when Shizuku itself is running.
+
+### Recovery and manual warning
+
+The default one-second interruption minimizes risk, but non-root recovery cannot be absolute:
+
+- JustProxy refuses to start a cycle when Android reports that mobile data is already disabled or cannot confirm that it is enabled. It will not turn on data that the user had already turned off.
+- Before disabling data, JustProxy synchronously stores a device-protected recovery marker. The Shizuku UserService attempts the enable command in a `finally` path, and the marker is cleared only after Android reports mobile data enabled.
+- Stop or restart requests received during a cycle wait for the restore attempt. A pending marker prevents another disable operation; when Shizuku becomes ready again, JustProxy attempts enable-only recovery.
+- If the enable command or verification fails, status and the foreground notification warn that mobile data may be off. Open Android network settings and turn mobile data on manually. Do not wait for JustProxy if connectivity is important.
+- A phone reboot, Shizuku process/server death, revoked debugging authorization, an OEM telephony failure, or Android killing both processes during the disabled window can prevent automatic recovery. Non-root Shizuku itself must be started again after every reboot, so JustProxy cannot promise that mobile data will always be restored.
+- The command acts on Android's current default data subscription. Treat this beta as a single/default-data-SIM feature and do not switch the default SIM during a cycle.
+- Keep the Wi-Fi/hotspot path that carries WireGuard locally available when possible. Do not use airplane mode: it can also tear down that client-to-phone path.
+
+The carrier may return the **same public IP** after one cycle or any number of cycles. `guarantees_ip_change` is always `false`; trust the observed **changed**, **unchanged**, or **failed** result.
+
+### Manual fallback
+
+If Shizuku is unavailable or you leave the beta feature disabled:
 
 1. Leave the phone's Wi-Fi/hotspot path available to the client when possible.
 2. Manually turn **mobile data** off.
 3. Wait briefly, then turn mobile data on and wait for cellular service to return.
 4. Allow the WireGuard client to re-handshake, then tap **Check IP** in JustProxy.
 5. Trust the reported observation: **changed**, **unchanged**, or **check failed**.
-
-The carrier may return the same public IP after any number of toggles. Airplane mode can also disable the Wi-Fi/hotspot link that carries the local WireGuard tunnel, so a mobile-data-only toggle is usually less disruptive.
 
 ## Traffic analyzer and privacy
 
@@ -249,7 +295,11 @@ The public-IP check contacts https://api.ipify.org over the selected Android net
 | Allow private/LAN destinations | Advanced legacy-proxy destination override; off by default |
 | WireGuard UDP port | Local encrypted listener; default 51820 and must differ from proxy/control ports |
 | Proxy port | Proxy listener; control API uses the next port |
-| Reconnect interval | 0 disables; 1 to 1440 minutes schedules proxy/WireGuard flow reconnect |
+| Reconnect interval | 0 disables; 1 to 1440 minutes schedules proxy/WireGuard flow reconnect without toggling mobile data |
+| Automatic IP rotation - Shizuku | Disabled by default; cycles mobile data only when cellular-only egress and Shizuku are ready |
+| IP-rotation interval | 1 to 1440 minutes; independent of the reconnect interval |
+| Data-off time | 1 to 10 seconds; default 1 second |
+| Rotate now | Requests one Shizuku mobile-data cycle; unavailable while another cycle or recovery is active |
 | Idle timeout | Closes legacy proxy sessions with no activity |
 | Maximum connections | Bounds concurrent legacy proxy sessions |
 | Data cap | Stops the run after the combined gateway/proxy MiB estimate; the run survives network flaps and resets on stop/start or process recreation |
@@ -266,14 +316,19 @@ Authorization: Bearer PHONE_PASSWORD
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | /v1/status | Service, proxy, public IP, rotation, and nested WireGuard gateway status |
+| GET | /v1/status | Service, proxy, public IP, session rotation, nested WireGuard status, and nested `ip_rotation` status |
 | GET | /v1/metrics | Run/today/lifetime totals plus WireGuard bytes and flow counts |
 | GET | /v1/ip-history | Recent public-IP observations |
 | GET | /v1/sessions | Recent sanitized session metadata |
-| POST | /v1/rotate | Close/reconnect sessions and schedule an IP check |
+| POST | /v1/rotate | Close/reconnect sessions without toggling mobile data, then schedule an IP check |
+| POST | /v1/ip-rotate | Request one Shizuku mobile-data cycle and subsequent IP check |
 | POST | /v1/check-ip | Schedule a public-IP check |
 
 Do not expose the control port through Internet port forwarding. Authentication is not a substitute for TLS on an untrusted network.
+
+For authenticated, well-formed action requests, the control API keeps the existing HTTP 200 envelope for compatibility. Always inspect `accepted`; a rejected action returns `accepted: false`, `action: "none"`, and a machine-readable `reason` instead of implying that work was scheduled.
+
+`POST /v1/ip-rotate` can briefly interrupt every JustProxy upstream flow and may leave mobile data needing manual recovery if Android or Shizuku fails during the operation. Possession of the control token therefore authorizes this disruptive action whenever the Shizuku feature is ready. Keep the API on loopback or a trusted private LAN. The response always reports `guarantees_ip_change: false`.
 
 The API never returns a WireGuard private key or an exportable client profile. Create, export, regenerate, and revoke the one peer only through the local Android UI.
 
@@ -327,14 +382,35 @@ The project includes integration tests for:
 - bounded listener saturation, authentication deadlines, connection caps, idle timeouts, rotation, and shutdown;
 - local-only ingress address policy;
 - authenticated control API routes;
+- Shizuku capability gating, fixed-command execution, command timeouts, data-enabled prechecks, finally-path restoration, persistent recovery markers, and lifecycle deferral;
+- separate `/v1/rotate` and `/v1/ip-rotate` behavior;
 - analytics sanitization, IP validation, live byte checkpoints, and local-day rollups;
-- Python SDK, CLI, WireGuard model compatibility, error handling, and proxy URL helpers.
+- Python SDK, CLI, WireGuard/IP-rotation model compatibility, `rotate_ip()` routing, error handling, and proxy URL helpers.
 
 CI runs the Rust tests/lints, Android/JVM tests and lint, Python suite, native Android cross-build, APK packaging checks, and a clean wheel installation. A real-phone/client smoke test remains required for WireGuard handshakes, TCP/UDP, IPv4/IPv6, hotspot reachability, cellular loss/recovery, and manufacturer-specific background behavior.
 
+### v0.3 Pixel/Shizuku real-device smoke test
+
+Run this checklist on at least one supported stock Pixel before publishing a v0.3 beta:
+
+- [ ] Install the candidate APK and the official Shizuku app on a real, unrooted Pixel; record model, Android version, build number, carrier, SIM count, and Shizuku version.
+- [ ] Start Shizuku through wireless debugging, deny JustProxy access once, and verify no mobile-data command runs and existing WireGuard/proxy traffic is left online.
+- [ ] Grant access, keep cellular-only egress enabled, use the one-second default, and confirm the card reaches **Ready**.
+- [ ] Establish a WireGuard tunnel, verify TCP and UDP through cellular, tap **Rotate now**, and confirm mobile data returns, a fresh cellular network is selected, WireGuard re-handshakes, and traffic resumes.
+- [ ] Confirm both possible valid carrier results are reported honestly: **changed** and **unchanged**. Never fail a test solely because the carrier returns the same IP.
+- [ ] Set the interval to one minute, observe exactly one scheduled cycle, then disable the switch and verify no later cycle occurs. Restore the intended release interval afterward.
+- [ ] Start with mobile data already off and verify JustProxy refuses the cycle and does not turn data on.
+- [ ] Tap **Stop** and **Restart** during a cycle and verify the restore attempt finishes before the lifecycle action.
+- [ ] Kill only the JustProxy app process during the off window and verify the daemon UserService attempts restoration and the persisted state is reconciled when JustProxy returns.
+- [ ] Stop Shizuku or revoke debugging authorization during the off window. Verify `recovery_required` remains set, no second disable occurs, and JustProxy warns that mobile data may be off. Manually enable data, restart Shizuku, and verify recovery clears.
+- [ ] Reboot the phone and verify scheduled IP rotation remains unavailable until Shizuku is started again. Confirm the documented manual-recovery path; do not assume JustProxy can restore data before Shizuku is running.
+- [ ] Verify `justproxy rotate` calls only `/v1/rotate`, while `justproxy rotate-ip` calls only `/v1/ip-rotate`.
+- [ ] Repeat the basic cycle with the client connected through the intended same-LAN or hotspot topology, and confirm there is no Wi-Fi egress fallback in cellular-only mode.
+- [ ] On a dual-SIM test device, do not change the default data SIM during a cycle; record the result as outside the initial single/default-SIM support target if behavior differs.
+
 ## Important limitations
 
-- WireGuard v0.2 supports one peer identity and one fixed pair of inner addresses. It is not a multi-user VPN server.
+- WireGuard v0.3 supports one peer identity and one fixed pair of inner addresses. It is not a multi-user VPN server.
 - The WireGuard data plane supports inner IPv4/IPv6 TCP and UDP but not general ICMP; `ping` may fail even when web and UDP traffic work.
 - The profile endpoint is a local LAN/hotspot address. There is no NAT traversal, relay, roaming endpoint service, or direct remote-access mode.
 - Guest-Wi-Fi isolation, host firewalls, router rules, or a changed phone LAN address can prevent the WireGuard handshake.
@@ -343,8 +419,10 @@ CI runs the Rust tests/lints, Android/JVM tests and lint, Python suite, native A
 - No custom desktop application is shipped; an official WireGuard client is required for the full-device tunnel.
 - The optional SOCKS5 proxy still supports TCP CONNECT only; BIND and UDP ASSOCIATE are rejected.
 - Legacy proxy credentials are not encrypted on the local hop. Prefer USB or a trusted personal LAN/hotspot.
-- Scheduled reconnect and manually toggling mobile data do not guarantee carrier-IP rotation.
-- The current APK is a beta/debug build, not a Play Store production release.
+- Session reconnect, manual mobile-data toggling, and Shizuku mobile-data cycling do not guarantee carrier-IP rotation.
+- Shizuku IP rotation is disabled by default, initially targeted at stock Pixel/Android, requires cellular-only egress, and may be rejected by an OEM or device policy.
+- Non-root Shizuku must be started again after every reboot. If Shizuku or Android fails during the disabled window, mobile data may require manual re-enabling despite JustProxy's finally-path restore and persisted recovery marker.
+- The v0.3.0-beta.1 APK is a beta/debug build, not a Play Store production release.
 - Public-IP checking depends on the external ipify endpoint.
 - Battery optimization and aggressive manufacturer task killers may stop long-running background networking despite the foreground service.
 - JustProxy requests a sticky service restart after an ordinary Android process kill, but Android and

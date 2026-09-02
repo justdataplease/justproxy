@@ -38,7 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--compact", action="store_true", help="print compact JSON"
     )
-    parser.add_argument("--version", action="version", version="%(prog)s 0.2.0b1")
+    parser.add_argument("--version", action="version", version="%(prog)s 0.3.0b1")
 
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status", help="show service and current-IP status")
@@ -46,6 +46,10 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "rotate",
         help="request rotation (a different carrier IP is not guaranteed)",
+    )
+    commands.add_parser(
+        "rotate-ip",
+        help="request a Shizuku mobile-data cycle (a new IP is not guaranteed)",
     )
     commands.add_parser("check-ip", help="request a fresh public-IP check")
     commands.add_parser("ip-history", help="show observed public-IP history")
@@ -181,6 +185,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "status": client.status,
             "metrics": client.metrics,
             "rotate": client.rotate,
+            "rotate-ip": client.rotate_ip,
             "check-ip": client.check_ip,
             "ip-history": client.ip_history,
             "sessions": client.sessions,

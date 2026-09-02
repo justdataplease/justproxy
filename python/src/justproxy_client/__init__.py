@@ -20,6 +20,7 @@ from .models import (
     IPCheckResult,
     IPHistory,
     IPHistoryEntry,
+    IpRotationStatus,
     JsonModel,
     Metrics,
     RotationResult,
@@ -29,7 +30,7 @@ from .models import (
     WireGuardStatus,
 )
 
-__version__ = "0.2.0b1"
+__version__ = "0.3.0b1"
 
 __all__ = [
     "APIError",
@@ -40,6 +41,7 @@ __all__ = [
     "IPCheckResult",
     "IPHistory",
     "IPHistoryEntry",
+    "IpRotationStatus",
     "InvalidResponseError",
     "JsonModel",
     "JustProxyClient",

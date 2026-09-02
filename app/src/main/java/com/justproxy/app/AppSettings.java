@@ -20,6 +20,8 @@ import javax.crypto.spec.GCMParameterSpec;
 public final class AppSettings {
     public static final int DEFAULT_PORT = 8282;
     public static final int DEFAULT_WIREGUARD_PORT = 51820;
+    public static final int DEFAULT_SHIZUKU_ROTATION_INTERVAL_MINUTES = 60;
+    public static final int DEFAULT_SHIZUKU_DATA_OFF_SECONDS = 1;
     private static final String PREFS = "settings";
     private static final String SECRETS = "secrets";
     private static final String KEY_ALIAS = "justproxy.credentials.v1";
@@ -90,6 +92,37 @@ public final class AppSettings {
 
     public void setRotationMinutes(int value) {
         preferences.edit().putInt("rotation_minutes", bounded(value, 0, 1440, 0)).apply();
+    }
+
+    public boolean isShizukuIpRotationEnabled() {
+        return preferences.getBoolean("shizuku_ip_rotation_enabled", false);
+    }
+
+    public void setShizukuIpRotationEnabled(boolean value) {
+        preferences.edit().putBoolean("shizuku_ip_rotation_enabled", value).apply();
+    }
+
+    public int getShizukuIpRotationIntervalMinutes() {
+        return bounded(preferences.getInt("shizuku_ip_rotation_interval_minutes",
+                        DEFAULT_SHIZUKU_ROTATION_INTERVAL_MINUTES),
+                1, 1440, DEFAULT_SHIZUKU_ROTATION_INTERVAL_MINUTES);
+    }
+
+    public void setShizukuIpRotationIntervalMinutes(int value) {
+        preferences.edit().putInt("shizuku_ip_rotation_interval_minutes",
+                bounded(value, 1, 1440,
+                        DEFAULT_SHIZUKU_ROTATION_INTERVAL_MINUTES)).apply();
+    }
+
+    public int getShizukuDataOffSeconds() {
+        return bounded(preferences.getInt("shizuku_data_off_seconds",
+                        DEFAULT_SHIZUKU_DATA_OFF_SECONDS),
+                1, 10, DEFAULT_SHIZUKU_DATA_OFF_SECONDS);
+    }
+
+    public void setShizukuDataOffSeconds(int value) {
+        preferences.edit().putInt("shizuku_data_off_seconds",
+                bounded(value, 1, 10, DEFAULT_SHIZUKU_DATA_OFF_SECONDS)).apply();
     }
 
     public int getIdleTimeoutSeconds() {

@@ -17,6 +17,7 @@ from justproxy_client import (  # noqa: E402
     APIError,
     AuthenticationError,
     ConfigurationError,
+    IpRotationStatus,
     InvalidResponseError,
     JustProxyClient,
     WireGuardStatus,
@@ -52,6 +53,20 @@ STATUS = {
         "downloaded_bytes": 2_000,
         "last_handshake_ms": 1_700_000_050_000,
         "future_wireguard_field": {"preserved": True},
+    },
+    "ip_rotation": {
+        "enabled": True,
+        "provider": "shizuku",
+        "state": "ready",
+        "message": "Ready",
+        "interval_minutes": 60,
+        "data_off_seconds": 1,
+        "next_at_ms": 1_700_003_600_000,
+        "last_attempt_at_ms": 1_700_000_000_000,
+        "last_outcome": "unchanged",
+        "recovery_required": False,
+        "guarantees_ip_change": False,
+        "future_ip_rotation_field": {"preserved": True},
     },
     "future_status_field": {"preserved": True},
 }
@@ -110,6 +125,15 @@ ROTATION = {
     "ip_changed": None,
     "manual_carrier_reset_required": True,
     "message": "Follow the carrier reset instructions, then check the IP again.",
+}
+
+IP_ROTATION = {
+    "accepted": True,
+    "action": "mobile_data_cycle_scheduled",
+    "previous_ip": "203.0.113.42",
+    "ip_changed": None,
+    "manual_carrier_reset_required": False,
+    "message": "Mobile-data cycle scheduled.",
 }
 
 CHECK_IP = {
@@ -176,6 +200,7 @@ class FakeAPI:
             ("GET", "/v1/ip-history"): (200, IP_HISTORY),
             ("GET", "/v1/sessions"): (200, SESSIONS),
             ("POST", "/v1/rotate"): (200, ROTATION),
+            ("POST", "/v1/ip-rotate"): (200, IP_ROTATION),
             ("POST", "/v1/check-ip"): (200, CHECK_IP),
         }
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -228,6 +253,24 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(
                 wireguard["future_wireguard_field"], {"preserved": True}
             )
+            self.assertIsInstance(status.ip_rotation, IpRotationStatus)
+            ip_rotation = status.ip_rotation
+            self.assertIsNotNone(ip_rotation)
+            self.assertTrue(ip_rotation.enabled)
+            self.assertEqual(ip_rotation.provider, "shizuku")
+            self.assertEqual(ip_rotation.state, "ready")
+            self.assertEqual(ip_rotation.interval_minutes, 60)
+            self.assertEqual(ip_rotation.data_off_seconds, 1)
+            self.assertEqual(ip_rotation.next_at_ms, 1_700_003_600_000)
+            self.assertEqual(
+                ip_rotation.last_attempt_at_ms, 1_700_000_000_000
+            )
+            self.assertEqual(ip_rotation.last_outcome, "unchanged")
+            self.assertFalse(ip_rotation.recovery_required)
+            self.assertFalse(ip_rotation.guarantees_ip_change)
+            self.assertEqual(
+                ip_rotation["future_ip_rotation_field"], {"preserved": True}
+            )
 
             metrics = client.metrics()
             self.assertEqual(metrics.run_downloaded_bytes, 20)
@@ -254,6 +297,16 @@ class ClientTests(unittest.TestCase):
             self.assertIsNone(rotation.ip_changed)
             self.assertTrue(rotation.manual_carrier_reset_required)
 
+            ip_rotation_request = client.rotate_ip()
+            self.assertTrue(ip_rotation_request.accepted)
+            self.assertEqual(
+                ip_rotation_request.action, "mobile_data_cycle_scheduled"
+            )
+            self.assertIsNone(ip_rotation_request.ip_changed)
+            self.assertFalse(
+                ip_rotation_request.manual_carrier_reset_required
+            )
+
             check = client.check_ip()
             self.assertTrue(check.accepted)
             self.assertEqual(check.message, "IP check scheduled.")
@@ -266,6 +319,7 @@ class ClientTests(unittest.TestCase):
                 ("GET", "/v1/ip-history"),
                 ("GET", "/v1/sessions"),
                 ("POST", "/v1/rotate"),
+                ("POST", "/v1/ip-rotate"),
                 ("POST", "/v1/check-ip"),
             ],
         )
@@ -286,7 +340,7 @@ class ClientTests(unittest.TestCase):
             )
         )
 
-    def test_wireguard_fields_are_optional_for_legacy_responses(self) -> None:
+    def test_additive_status_fields_are_optional_for_legacy_responses(self) -> None:
         with FakeAPI() as api:
             api.responses[("GET", "/v1/status")] = (
                 200,
@@ -300,6 +354,7 @@ class ClientTests(unittest.TestCase):
 
             status = client.status()
             self.assertIsNone(status.wireguard)
+            self.assertIsNone(status.ip_rotation)
             self.assertEqual(status["legacy_unknown"], "preserved")
 
             metrics = client.metrics()
@@ -499,6 +554,31 @@ class CLITests(unittest.TestCase):
         self.assertTrue(payload["accepted"])
         self.assertIsNone(payload["ip_changed"])
         self.assertTrue(payload["manual_carrier_reset_required"])
+
+    def test_rotate_ip_command_uses_the_dedicated_endpoint(self) -> None:
+        stdout = io.StringIO()
+        with FakeAPI() as api, redirect_stdout(stdout):
+            result = cli_main(
+                [
+                    "--base-url",
+                    api.url,
+                    "--token",
+                    "secret-token",
+                    "rotate-ip",
+                ]
+            )
+        self.assertEqual(result, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["accepted"])
+        self.assertEqual(payload["action"], "mobile_data_cycle_scheduled")
+        self.assertIsNone(payload["ip_changed"])
+        self.assertFalse(payload["manual_carrier_reset_required"])
+        self.assertEqual(api.requests[-1]["method"], "POST")
+        self.assertEqual(api.requests[-1]["path"], "/v1/ip-rotate")
+        self.assertEqual(
+            api.requests[-1]["authorization"], "Bearer secret-token"
+        )
+        self.assertEqual(api.requests[-1]["body"], b"{}")
 
     def test_env_can_run_without_token_when_port_is_explicit(self) -> None:
         stdout = io.StringIO()
