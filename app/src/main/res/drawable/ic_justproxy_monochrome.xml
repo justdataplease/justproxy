@@ -1,13 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <group android:translateX="8.1" android:translateY="8.1" android:scaleX="0.85" android:scaleY="0.85">
-        <group android:rotation="-25" android:pivotX="54" android:pivotY="54">
-            <path android:fillColor="@android:color/white" android:pathData="M39 33H48C59.05 33 68 41.95 68 53C68 64.05 59.05 73 48 73H44V63H48C53.52 63 58 58.52 58 53C58 47.48 53.52 43 48 43H39C33.48 43 29 47.48 29 53C29 57.09 31.46 60.61 35 62.16V72.6C25.87 70.75 19 62.68 19 53C19 41.95 27.95 33 39 33Z" />
-            <path android:fillColor="@android:color/white" android:pathData="M60 35H69C80.05 35 89 43.95 89 55C89 66.05 80.05 75 69 75H60C48.95 75 40 66.05 40 55C40 45.32 46.87 37.25 56 35.4V45.84C52.46 47.39 50 50.91 50 55C50 60.52 54.48 65 60 65H69C74.52 65 79 60.52 79 55C79 49.48 74.52 45 69 45H65V35Z" />
-        </group>
-    </group>
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M39 25H65C71 25 75 29 75 35V73C75 79 71 83 65 83H39C33 83 29 79 29 73V35C29 29 33 25 39 25ZM40 34C38 34 38 35 38 37V71C38 73 39 74 41 74H63C65 74 66 73 66 71V37C66 35 65 34 63 34Z" />
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M47 47H70V39L85 54L70 69V61H47Z" />
+
 </vector>
