@@ -30,7 +30,7 @@ from .models import (
     WireGuardStatus,
 )
 
-__version__ = "0.3.0b4"
+__version__ = "0.3.0b5"
 
 __all__ = [
     "APIError",

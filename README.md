@@ -61,11 +61,11 @@ Legacy proxy traffic follows a separate local HTTP/SOCKS5 listener. HTTPS uses C
 
 ## Downloads
 
-The v0.3.0-beta.4 distribution adds the Mobile Gateway icon and main-screen UI improvements. The distribution set is:
+The v0.3.0-beta.5 distribution fixes Shizuku IP rotation on Android 16 and newer, where every cycle previously failed with "Could not watch the cellular network". The distribution set is:
 
-- `android/JustProxy-android-0.3.0-beta.4-debug.apk`
-- `python/justproxy_client-0.3.0b4-py3-none-any.whl`
-- `python/justproxy_client-0.3.0b4.tar.gz`
+- `android/JustProxy-android-0.3.0-beta.5-debug.apk`
+- `python/justproxy_client-0.3.0b5-py3-none-any.whl`
+- `python/justproxy_client-0.3.0b5.tar.gz`
 - `SHA256SUMS.txt`
 - [Artifact notes](dist/README.md)
 
@@ -169,7 +169,7 @@ The result should match the public IP shown in JustProxy. With cellular-only ena
 Install the v0.3 beta wheel after it has been published to the distribution folder:
 
 ~~~powershell
-py -m pip install dist/python/justproxy_client-0.3.0b4-py3-none-any.whl
+py -m pip install dist/python/justproxy_client-0.3.0b5-py3-none-any.whl
 ~~~
 
 CLI examples:
@@ -426,7 +426,7 @@ Run this checklist on at least one supported stock Pixel before publishing a v0.
 - Shizuku IP rotation is disabled by default, initially targeted at stock Pixel/Android, requires cellular-only egress, and may be rejected by an OEM or device policy.
 - Non-root Shizuku must be started again after every reboot. If Shizuku or Android fails during the enabled window, airplane mode may require manual disabling despite JustProxy's finally-path restore and persisted recovery marker.
 - Airplane-mode cycling can interrupt Wi-Fi; a phone hotspot can stop and may not recover automatically. Prefer a shared trusted router with Pixel configured to keep Wi-Fi on in airplane mode.
-- The v0.3.0-beta.4 APK is a beta/debug build, not a Play Store production release.
+- The v0.3.0-beta.5 APK is a beta/debug build, not a Play Store production release.
 - Public-IP checking depends on the external ipify endpoint.
 - Battery optimization and aggressive manufacturer task killers may stop long-running background networking despite the foreground service.
 - JustProxy requests a sticky service restart after an ordinary Android process kill, but Android and

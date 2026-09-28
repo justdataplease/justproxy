@@ -1,13 +1,13 @@
 # JustProxy distribution artifacts
 
-This directory contains the v0.3.0-beta.4 test release:
+This directory contains the v0.3.0-beta.5 test release:
 
-- `android/JustProxy-android-0.3.0-beta.4-debug.apk`: debug-signed Android 8.0+ sideload build with the one-peer WireGuard gateway, optional legacy proxy, and disabled-by-default Shizuku airplane-mode IP-rotation beta.
-- `python/justproxy_client-0.3.0b4-py3-none-any.whl`: Python 3.9+ control API client wheel with `rotate_ip()`.
-- `python/justproxy_client-0.3.0b4.tar.gz`: Python client source distribution, not the complete JustProxy repository source.
+- `android/JustProxy-android-0.3.0-beta.5-debug.apk`: debug-signed Android 8.0+ sideload build with the one-peer WireGuard gateway, optional legacy proxy, and disabled-by-default Shizuku airplane-mode IP-rotation beta.
+- `python/justproxy_client-0.3.0b5-py3-none-any.whl`: Python 3.9+ control API client wheel with `rotate_ip()`.
+- `python/justproxy_client-0.3.0b5.tar.gz`: Python client source distribution, not the complete JustProxy repository source.
 - `SHA256SUMS.txt`: matching SHA-256 digests for all three release artifacts.
 
-Beta.4 adds the Mobile Gateway launcher, themed, in-app, and notification icons, plus a more compact main-screen header, scalable buttons, clearer disabled states, larger touch targets, and improved settings labels. The Python client is versioned with this distribution; its API is unchanged.
+Beta.5 fixes Shizuku IP rotation on Android 16 and newer. The privileged UserService runs as the shell identity, and newer ConnectivityService builds reject its connectivity queries ("Package com.justproxy.app does not belong to 2000"), so every cycle failed with "Could not watch the cellular network". The app now observes cellular loss itself and passes the UserService a narrow observer binder; the UserService protocol version was bumped so Shizuku replaces the old daemon on upgrade. Verified on a Pixel 8 Pro running Android 17. The Python client is versioned with this distribution; its API is unchanged.
 
 The airplane-mode rotation behavior introduced in beta.3 is retained. Beta.3 replaced data-only rotation behind **Rotate now**, scheduled rotation, and `POST /v1/ip-rotate` with an airplane-mode cycle. It waits for cellular detach, keeps the configured one-second default hold, always attempts to turn airplane mode off, verifies recovery, and safely migrates any beta.2 recovery marker.
 
@@ -22,9 +22,9 @@ Airplane mode interrupts cellular calls/texts and can interrupt Wi-Fi. Automatic
 On PowerShell, calculate the APK digest with:
 
 ```powershell
-Get-FileHash .\android\JustProxy-android-0.3.0-beta.4-debug.apk -Algorithm SHA256
+Get-FileHash .\android\JustProxy-android-0.3.0-beta.5-debug.apk -Algorithm SHA256
 ```
 
-Compare the result with the `SHA256SUMS.txt` published in the same v0.3.0-beta.4 release. The exported WireGuard `.conf` is not a public distribution artifact: it contains a client private key and must be transferred and stored securely.
+Compare the result with the `SHA256SUMS.txt` published in the same v0.3.0-beta.5 release. The exported WireGuard `.conf` is not a public distribution artifact: it contains a client private key and must be transferred and stored securely.
 
 See the repository [README](../README.md) for official-client import steps, same-LAN/hotspot requirements, cellular fail-closed behavior, endpoint/firewall limitations, exact Shizuku setup and recovery limitations, separate `/v1/rotate` and `/v1/ip-rotate` actions, Python usage, and the real-Pixel smoke-test checklist.
