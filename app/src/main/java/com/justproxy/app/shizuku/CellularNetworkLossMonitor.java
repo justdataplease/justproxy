@@ -11,11 +11,11 @@ interface CellularNetworkLossMonitor extends AutoCloseable {
     @Override
     void close();
 
-    /** Fails closed when an older Shizuku server cannot supply a service Context. */
+    /** Fails closed when the app did not supply a cellular-loss observer. */
     static Factory unavailableFactory() {
         return () -> {
             throw new IllegalStateException(
-                    "Shizuku API 13 or newer is required to observe cellular loss");
+                    "No cellular-loss observer was supplied for this cycle");
         };
     }
 }

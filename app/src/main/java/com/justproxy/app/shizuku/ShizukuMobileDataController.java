@@ -27,8 +27,8 @@ public final class ShizukuMobileDataController implements AutoCloseable {
     public static final int MAX_DOWN_TIME_MILLIS = MobileDataCommandEngine.MAX_DOWN_TIME_MILLIS;
 
     private static final int PERMISSION_REQUEST_CODE = 0x4a50;
-    private static final int USER_SERVICE_PROTOCOL_VERSION = 3;
-    // Keep the beta.2 identity so protocol version 3 replaces its daemon on upgrade.
+    private static final int USER_SERVICE_PROTOCOL_VERSION = 5;
+    // Keep the beta.2 identity; bumping the protocol version replaces the daemon on upgrade.
     private static final String USER_SERVICE_TAG = "justproxy-mobile-data";
     private static final String NETWORK_SETTINGS_PERMISSION =
             "android.permission.NETWORK_SETTINGS";
@@ -143,6 +143,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
     private final Shizuku.OnBinderReceivedListener binderReceivedListener =
             this::handleBinderReceived;
     private final Shizuku.OnBinderDeadListener binderDeadListener = this::handleBinderDead;
+    private final CellularNetworkLossMonitor.Factory lossMonitorFactory;
     private final Shizuku.OnRequestPermissionResultListener permissionResultListener =
             this::handlePermissionResult;
     private final ServiceConnection serviceConnection = new ServiceConnection() {
@@ -206,6 +207,7 @@ public final class ShizukuMobileDataController implements AutoCloseable {
         recoveryReconciler = new RecoveryReconciler(
                 dataStateReader, this::clearRecoveryRequired, System::nanoTime);
         airplaneStateReader = new AndroidAirplaneModeStateReader(applicationContext);
+        lossMonitorFactory = new AndroidCellularNetworkLossMonitorFactory(applicationContext);
         airplaneStatePoller = new AirplaneModeStatePoller(
                 airplaneStateReader, System::nanoTime, Thread::sleep);
         airplaneRecoveryReconciler = new AirplaneModeRecoveryReconciler(
@@ -290,12 +292,41 @@ public final class ShizukuMobileDataController implements AutoCloseable {
                     "Airplane-mode time must be between 1 and 10 seconds")));
             return;
         }
+        // Capture the current cellular handles here, in the app process: the UserService's
+        // shell identity cannot query ConnectivityService on Android 16+.
+        final CellularNetworkLossMonitor lossMonitor;
+        try {
+            lossMonitor = Objects.requireNonNull(
+                    lossMonitorFactory.open(), "loss monitor factory returned null");
+        } catch (RuntimeException exception) {
+            dispatch(() -> callback.onError(new IllegalStateException(
+                    "Could not watch the cellular network; cycle was not started: "
+                            + exception.getMessage(), exception)));
+            return;
+        }
+        ICellularLossObserver observer = new ICellularLossObserver.Stub() {
+            @Override
+            public boolean awaitLoss(long timeoutMillis) {
+                try {
+                    return lossMonitor.awaitLoss(timeoutMillis);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Cellular-loss wait was interrupted");
+                }
+            }
+        };
         executeAsync(
                 RecoveryModePolicy.Mode.AIRPLANE_MODE,
                 RecoveryModePolicy.Mode.AIRPLANE_MODE,
                 true,
                 callback,
-                service -> service.cycle(downTimeMillis));
+                service -> {
+                    try {
+                        return service.cycle(downTimeMillis, observer);
+                    } finally {
+                        lossMonitor.close();
+                    }
+                });
     }
 
     public void restoreAsync(OperationCallback callback) {

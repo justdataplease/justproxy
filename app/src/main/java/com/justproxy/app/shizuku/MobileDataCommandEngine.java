@@ -71,6 +71,12 @@ final class MobileDataCommandEngine {
     }
 
     synchronized MobileDataCommandResult cycle(int downTimeMillis) {
+        return cycle(downTimeMillis, lossMonitorFactory);
+    }
+
+    synchronized MobileDataCommandResult cycle(
+            int downTimeMillis, CellularNetworkLossMonitor.Factory monitorFactory) {
+        Objects.requireNonNull(monitorFactory, "monitorFactory");
         long startedNanos = System.nanoTime();
         if (downTimeMillis < MIN_DOWN_TIME_MILLIS
                 || downTimeMillis > MAX_DOWN_TIME_MILLIS) {
@@ -120,7 +126,7 @@ final class MobileDataCommandEngine {
         final CellularNetworkLossMonitor lossMonitor;
         try {
             lossMonitor = Objects.requireNonNull(
-                    lossMonitorFactory.open(), "loss monitor factory returned null");
+                    monitorFactory.open(), "loss monitor factory returned null");
         } catch (RuntimeException exception) {
             return result(
                     MobileDataCommandResult.OPERATION_CYCLE,
